@@ -113,7 +113,6 @@ def train(env, args, build_model):
         # entropy regularizer to encourage action diversity
         entropy_reg = - tf.reduce_mean(tf.reduce_sum(probs * tf.log(probs), 1))
         action_logits = vector_slice(tf.log(probs), actions_taken_ph)
-        # advantage = reward_to_go_ph
         observed_reward_ph = tf.placeholder('float')
         objective = observed_reward_ph * tf.reduce_sum(action_logits) \
             + args['reg_coeff'] * entropy_reg
@@ -130,29 +129,23 @@ def train(env, args, build_model):
             optimizer = tf.train.AdamOptimizer(learning_rate,
                                                args['adam_beta1'],
                                                args['adam_beta2'],
-                                               args['adam_epsilon']
+                                               args['adam_epsilon'],
                                               )
-                                            #   ).minimize(
-                                            #       -objective,
-                                            #       global_step=global_step,
-                                            #   )
-        if args['optimizer'] == 'ag':
+        elif args['optimizer'] == 'ag':
             optimizer = tf.train.MomentumOptimizer(learning_rate,
                                                    args['momentum'],
-                                                   use_nesterov=True
+                                                   use_nesterov=True,
                                                   )
-                                                #   ).minimize(
-                                                #       -objective,
-                                                #       global_step=global_step,
-                                                #   )
+        elif args['optimizer'] == 'rmsprop':
+            optimizer = tf.train.RMSPropOptimizer(learning_rate,
+                                                   args['rmsprop_decay'],
+                                                   args['momentum'],
+                                                   args['rmsprop_epsilon'],
+                                                  )
         else:
             optimizer = tf.train.MomentumOptimizer(learning_rate,
-                                                   args['momentum']
+                                                   args['momentum'],
                                                   )
-                                                #   ).minimize(
-                                                #       -objective,
-                                                #       global_step=global_step,
-                                                #   )
 
         # train ops
         grad_vars = optimizer.compute_gradients(-objective)
@@ -170,16 +163,8 @@ def train(env, args, build_model):
             # tf.scalar_summary('objective', objective)
 
             print '* extra summary'
-            # for v in tf.get_collection(tf.GraphKeys.ACTIVATIONS):
-            #     tf.histogram_summary('activations/%s' % v.name, v)
-            #     print 'activations/%s' % v.name
-            #     tf.scalar_summary('sparsity/%s' % v.name,
-            #                       tf.nn.zero_fraction(v))
-            #     print 'sparsity/%s' % v.name
-
             for g, v in grad_vars:
-                tf.histogram_summary('gradients/%s' % v.name,
-                                     g)
+                tf.histogram_summary('gradients/%s' % v.name, g)
                 print 'gradients/%s' % v.name
 
             summary_op = tf.merge_all_summaries()
@@ -189,6 +174,7 @@ def train(env, args, build_model):
             if not args['no_summary']:
                 writer = tf.train.SummaryWriter(summary_dir, sess.graph,
                                                 flush_secs=30)
+                print '* writing summary to', summary_dir
             restore_vars(saver, sess, args['checkpoint_dir'], args['restart'])
 
             print '* regularized parameters:'
@@ -319,13 +305,17 @@ def build_argparser():
     parse.add_argument('--n_save_interval', type=int, default=128)
     parse.add_argument('--n_train_steps', type=int, default=1e5)
 
-    parse.add_argument('--momentum', type=float, default=0.8)
+    # optimizer options
+    parse.add_argument('--momentum', type=float, default=0.2)
     parse.add_argument('--adam_beta1', type=float, default=0.9)
     parse.add_argument('--adam_beta2', type=float, default=0.999)
     parse.add_argument('--adam_epsilon', type=float, default=1e-8)
+    parse.add_argument('--rmsprop_decay', type=float, default=0.9)
+    parse.add_argument('--rmsprop_epsilon', type=float, default=1e-10)
 
-    parse.add_argument('--optimizer', choices=['adam', 'momentum', 'ag'],
-                       default='momentum')
+    # training options
+    parse.add_argument('--optimizer', choices=['adam', 'momentum', 'ag',
+                                               'rmsprop'], default='rmsprop')
     parse.add_argument('--initial_learning_rate', type=float, default=0.001)
     parse.add_argument('--n_decay_steps', type=int, default=512)
     parse.add_argument('--no_decay_staircase', action='store_true')
@@ -350,7 +340,4 @@ if __name__ == '__main__':
     model = importlib.import_module('models.%s' % args.model)
 
     # train
-    if args.model == 'cnn':
-        train(env, vars(args), partial(model.build_model, 3, 0))
-    else:
-        train(env, vars(args), model.build_model)
+    train(env, vars(args), model.build_model)
