@@ -247,7 +247,7 @@ def train(env, args, build_model):
                     # ] * len_episode
 
                     # rewards to go with lambda decay
-                    f_vals = [np.sum(np.prod([
+                    f_vals += [np.sum(np.prod([
                         rewards[t:],
                         [args['reward_lambda']**u for u in xrange(len_episode-t)]],
                         axis=0))
