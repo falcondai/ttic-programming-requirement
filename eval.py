@@ -27,7 +27,8 @@ def to_argmax(policy_prob_func, obs):
     z[np.argmax(ps)] = 1.
     return z
 
-def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples, use_argmax):
+def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples,
+             use_argmax, n_obs_ticks):
     with tf.Graph().as_default() as g:
         with tf.Session() as sess:
             restore_vars(sess, checkpoint_path, meta_path)
@@ -39,7 +40,6 @@ def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples, use_argm
             actions_taken_ph = tf.placeholder('int32')
             action_logits = vector_slice(tf.log(probs), actions_taken_ph)
             observed_reward_ph = tf.placeholder('float')
-            objective = (observed_reward_ph) * tf.reduce_mean(action_logits)
 
             # env
             env = gym.make(env_id)
@@ -84,21 +84,21 @@ def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples, use_argm
                     actions_taken_ph: actions,
                     observed_reward_ph: np.sum(rewards),
                 }
-                objective_val = sess.run([
-                    objective,
-                    ], feed_dict=val_feed)
-                obj_val.append(objective.eval(feed_dict=val_feed))
-            print 'obj', np.mean(obj_val)
 
             # summary
             print '* summary'
             print 'episode lengths:',
             print 'mean', np.mean(episode_lengths),
             print 'median', np.median(episode_lengths),
+            print 'max', np.max(episode_lengths),
+            print 'min', np.min(episode_lengths),
             print 'std', np.std(episode_lengths)
+
             print 'episode rewards:',
             print 'mean', np.mean(episode_rewards),
             print 'median', np.median(episode_rewards),
+            print 'max', np.max(episode_rewards),
+            print 'min', np.min(episode_rewards),
             print 'std', np.std(episode_rewards)
 
 if __name__ == '__main__':
@@ -111,6 +111,7 @@ if __name__ == '__main__':
     parse.add_argument('--n_samples', type=int, default=16)
     parse.add_argument('--env', default='CartPole-v0')
     parse.add_argument('--argmax', action='store_true')
+    parse.add_argument('--n_obs_ticks', type=int, default=1)
 
     args = parse.parse_args()
 
@@ -126,4 +127,4 @@ if __name__ == '__main__':
         meta_path = args.meta_path
 
     evaluate(checkpoint_path, meta_path, args.env, not args.no_render,
-             args.n_samples, args.argmax)
+             args.n_samples, args.argmax, args.n_obs_ticks)

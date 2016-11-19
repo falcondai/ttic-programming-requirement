@@ -111,20 +111,16 @@ def train(env, args, build_model):
         max_episode_reward_ph = tf.placeholder('float')
         min_episode_reward_ph = tf.placeholder('float')
         avg_tick_reward_ph = tf.placeholder('float')
+        avg_reg_ph = tf.placeholder('float')
 
         # expected reward under policy
         # entropy regularizer to encourage action diversity
         entropy_reg = - tf.reduce_mean(tf.reduce_sum(probs * tf.log(probs), 1))
         action_logits = vector_slice(tf.log(probs), actions_taken_ph)
-        observed_reward_ph = tf.placeholder('float')
-        rewards_to_go_ph = tf.placeholder('float')
+        advantage_ph = tf.placeholder('float')
 
-        # with total episodic reward
-        # objective = observed_reward_ph * tf.reduce_sum(action_logits) \
-        #     + args['reg_coeff'] * entropy_reg
-
-        # with rewards to go
-        objective = tf.reduce_sum(action_logits * rewards_to_go_ph) \
+        # with rewards to go and baseline
+        objective = tf.reduce_sum(action_logits * advantage_ph) \
             + args['reg_coeff'] * entropy_reg
 
         # optimization
@@ -172,7 +168,7 @@ def train(env, args, build_model):
             tf.scalar_summary('min_episode_reward', min_episode_reward_ph)
             tf.scalar_summary('average_tick_reward', avg_tick_reward_ph)
             tf.scalar_summary('average_episode_length', avg_len_episode_ph)
-            # tf.scalar_summary('regularizer', entropy_reg)
+            tf.scalar_summary('average_tick_regularization', avg_reg_ph)
             # tf.scalar_summary('objective', objective)
 
             print '* extra summary'
@@ -229,34 +225,44 @@ def train(env, args, build_model):
                     episode_rewards.append(np.sum(rewards))
 
                 avg_len_episode = n_ticks * 1. / args['n_update_episodes']
+                avg_tick_reward = np.sum(episode_rewards) * 1. / n_ticks
 
                 # transform and preprocess the rollouts
                 obs = []
                 action_inds = []
-                # the objective function values
                 f_vals = []
                 for observations, actions, rewards in episodes:
                     len_episode = len(observations)
                     obs += observations
                     action_inds += actions
-                    # total episodic reward with lambda decay over ticks
-                    # f_vals += [np.sum(np.prod([
-                    #     rewards,
-                    #     [args['reward_lambda']**t for t in xrange(len_episode)]],
-                    #     axis=0))
-                    # ] * len_episode
-
-                    # rewards to go with lambda decay
-                    f_vals += [np.sum(np.prod([
-                        rewards[t:],
-                        [args['reward_lambda']**u for u in xrange(len_episode-t)]],
-                        axis=0))
-                    for t in xrange(len_episode)]
+                    # compute the objective values
+                    if args['objective'] == 'episodic_reward':
+                        # total episodic reward with lambda decay over ticks
+                        f_vals += [np.sum(np.prod([
+                            rewards,
+                            [args['reward_lambda']**t for t in xrange(len_episode)]],
+                            axis=0))
+                        ] * len_episode
+                    elif args['objective'] == 'reward_to_go':
+                        # rewards to go with lambda decay
+                        f_vals += [np.sum(np.prod([
+                            rewards[t:],
+                            [args['reward_lambda']**u for u in xrange(len_episode-t)]],
+                            axis=0))
+                        for t in xrange(len_episode)]
+                    else:
+                        # rewards to go with lambda decay and baseline
+                        f_vals += [np.sum(np.prod([
+                            rewards[t:],
+                            [args['reward_lambda']**u for u in xrange(len_episode-t)]],
+                            axis=0)) - avg_tick_reward * (len_episode-t)
+                        for t in xrange(len_episode)]
 
                 # estimate policy gradient by batches
                 # accumulate gradients over batches
                 acc_grads = dict([(grad, np.zeros(grad.get_shape()))
                                       for grad, var in grad_vars])
+                acc_reg = 0.
                 n_batch = int(np.ceil(n_ticks * 1. / args['n_batch_ticks']))
                 for j in xrange(n_batch):
                     start = j * args['n_batch_ticks']
@@ -265,16 +271,17 @@ def train(env, args, build_model):
                         obs_ph: obs[start:end],
                         keep_prob_ph: 1. - args['dropout_rate'],
                         actions_taken_ph: action_inds[start:end],
-                        # observed_reward_ph: episode_rewards[start:end],
-                        rewards_to_go_ph: f_vals[start:end],
+                        advantage_ph: f_vals[start:end],
                     }
 
                     # compute the expectation of gradients
-                    grad_vars_val = sess.run([
+                    grad_vars_val, entropy_reg_val = sess.run([
                         grad_vars,
-                        ], feed_dict=grad_feed)[0]
+                        entropy_reg,
+                        ], feed_dict=grad_feed)
                     for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
                         acc_grads[g] += g_val / args['n_update_episodes']
+                    acc_reg += entropy_reg_val * (end - start)
 
                 # update policy with the sample expectation of gradients
                 update_dict = {
@@ -282,7 +289,8 @@ def train(env, args, build_model):
                     avg_episode_reward_ph: np.mean(episode_rewards),
                     max_episode_reward_ph: np.max(episode_rewards),
                     min_episode_reward_ph: np.min(episode_rewards),
-                    avg_tick_reward_ph: np.sum(episode_rewards) * 1. / n_ticks,
+                    avg_tick_reward_ph: avg_tick_reward,
+                    avg_reg_ph: acc_reg / n_ticks,
                 }
                 update_dict.update(acc_grads)
                 summary_val, _ = sess.run([summary_op, update_policy_op],
@@ -305,13 +313,19 @@ def train(env, args, build_model):
 def build_argparser():
     parse = argparse.ArgumentParser()
 
+    parse.add_argument('--model', required=True)
+
     # gym options
     parse.add_argument('--env', default='CartPole-v0')
-    parse.add_argument('--model', required=True)
     parse.add_argument('--monitor', action='store_true')
     parse.add_argument('--monitor_dir',
                        default='/tmp/gym-monitor-%i' % time.time())
 
+    # objective options
+    parse.add_argument('--objective', choices=['episodic_reward',
+                                               'reward_to_go',
+                                               'baseline'],
+                       default='reward_to_go')
     parse.add_argument('--reg_coeff', type=float, default=0.0001)
     parse.add_argument('--reward_lambda', type=float, default=1.)
     parse.add_argument('--dropout_rate', type=float, default=0.2)
