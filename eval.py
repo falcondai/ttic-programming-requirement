@@ -33,8 +33,8 @@ def to_epsilon_greedy(epsilon, policy_prob_func, obs):
     z[np.argmax(ps)] += 1. - epsilon
     return z
 
-def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples,
-             policy_type, n_obs_ticks, epsilon):
+def evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
+             env_render, n_samples, policy_type, n_obs_ticks, epsilon):
     with tf.Graph().as_default() as g:
         with tf.Session() as sess:
             test_restore_vars(sess, checkpoint_path, meta_path)
@@ -46,15 +46,6 @@ def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples,
             actions_taken_ph = tf.placeholder('int32')
             action_logits = vector_slice(tf.log(probs), actions_taken_ph)
             observed_reward_ph = tf.placeholder('float')
-
-            # env
-            env = gym.make(env_id)
-            spec = envs.registry.env_specs[env_id]
-            print '* environment', env_id
-            print 'observation space', env.observation_space
-            print 'action space', env.action_space
-            print 'timestep limit', spec.timestep_limit
-            print 'reward threshold', spec.reward_threshold
 
             # evaluation
             episode_rewards = []
@@ -85,20 +76,14 @@ def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples,
                 # rollout with policy
                 observations, actions, rewards = rollout(
                     policy,
-                    env,
-                    spec.timestep_limit,
-                    render_env,
+                    env_spec,
+                    env_step,
+                    env_reset,
+                    env_render,
                     n_obs_ticks,
                 )
                 episode_rewards.append(np.sum(rewards))
                 episode_lengths.append(len(observations))
-
-                val_feed = {
-                    obs_ph: observations,
-                    keep_prob_ph: 1.,
-                    actions_taken_ph: actions,
-                    observed_reward_ph: np.sum(rewards),
-                }
 
             # summary
             print '* summary'
@@ -117,6 +102,8 @@ def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples,
             print 'std', np.std(episode_rewards)
 
 if __name__ == '__main__':
+    from util import passthrough, use_render_state
+
     # arguments
     parse = argparse.ArgumentParser()
     parse.add_argument('--checkpoint_path', required=True)
@@ -129,6 +116,12 @@ if __name__ == '__main__':
                                             'sample'], default='sample')
     parse.add_argument('--epsilon', type=float, default=1e-5)
     parse.add_argument('--n_obs_ticks', type=int, default=1)
+    parse.add_argument('--timestep_limit', type=int, default=10**9)
+    parse.add_argument('--use_render_state', action='store_true')
+    parse.add_argument('--scale', type=float, default=1.)
+    parse.add_argument('--interpolation', choices=['nearest', 'bilinear',
+                                                   'bicubic', 'cubic'],
+                       default='nearest')
 
     args = parse.parse_args()
 
@@ -143,5 +136,25 @@ if __name__ == '__main__':
     else:
         meta_path = args.meta_path
 
-    evaluate(checkpoint_path, meta_path, args.env, not args.no_render,
-             args.n_samples, args.policy, args.n_obs_ticks, args.epsilon)
+    # init env
+    gym_env = gym.make(args.env)
+    if args.use_render_state:
+        env_spec, env_step, env_reset, env_render = use_render_state(
+            gym_env, args.scale, args.interpolation)
+    else:
+        env_spec, env_step, env_reset, env_render = passthrough(gym_env)
+
+    env_spec['timestep_limit'] = min(gym_env.spec.timestep_limit,
+                                     args.timestep_limit)
+    env_render = None if args.no_render else env_render
+
+    print '* environment', args.env
+    print 'observation shape', env_spec['observation_shape']
+    print 'action space', gym_env.action_space
+    print 'timestep limit', env_spec['timestep_limit']
+    print 'reward threshold', gym_env.spec.reward_threshold
+
+    # eval
+    evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
+             env_render, args.n_samples, args.policy, args.n_obs_ticks,
+             args.epsilon)

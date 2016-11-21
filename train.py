@@ -33,9 +33,6 @@ def restore_vars(saver, sess, checkpoint_dir, restart=False):
     print '* overwriting checkpoints at %s' % checkpoint_dir
     return False
 
-def wrapped_env(env, output_state, output_image):
-    pass
-
 def load_rollout(data_dir):
     pass
 
@@ -49,27 +46,28 @@ def duplicate_obs(observations, n_obs_ticks):
         obs_q.append(observations[i:l-n_obs_ticks+i+1])
     return np.concatenate(obs_q, axis=-1)
 
-def rollout(behavior_policy, env, max_t, render_env=False, n_obs_ticks=1):
+def rollout(behavior_policy, env_spec, env_step, env_reset,
+            env_render=None, n_obs_ticks=1):
     '''rollout based on behavior policy from an environment'''
     # pad the first observation with zeros
-    obs = env.reset()
+    obs = env_reset()
     obs_q = deque(pad_zeros([obs], n_obs_ticks), n_obs_ticks)
 
     observations, actions, rewards = [], [], []
     done = False
     t = 0
-    while not done and t < max_t:
+    while not done and t < env_spec['timestep_limit']:
         policy_input = np.concatenate(obs_q, axis=-1)
         action_probs = behavior_policy(policy_input)
-        action = np.random.choice(env.action_space.n, p=action_probs)
+        action = np.random.choice(env_spec['action_size'], p=action_probs)
         obs_q.popleft()
         observations.append(obs)
         actions.append(action)
-        obs, reward, done, info = env.step(action)
+        obs, reward, done = env_step(action)
         rewards.append(reward)
         obs_q.append(obs)
-        if render_env:
-            env.render()
+        if env_render != None:
+            env_render()
         t += 1
     return observations, actions, rewards
 
@@ -88,7 +86,7 @@ def vector_slice(A, B):
     linear_A = tf.reshape(A, [-1])
     return tf.gather(linear_A, B + linear_index)
 
-def train(env, args, build_model):
+def train(env_spec, env_step, env_reset, env_render, args, build_model):
     summary_dir = 'tf-log/%s%d-%s' % (args['summary_prefix'], time.time(),
                                       os.path.basename(args['checkpoint_dir']))
 
@@ -114,11 +112,11 @@ def train(env, args, build_model):
     with tf.Graph().as_default() as g:
         # model
         print '* building model %s' % args['model']
-        policy_input_shape = list(env.observation_space.shape)
+        policy_input_shape = list(env_spec['observation_shape'])
         policy_input_shape[-1] *= args['n_obs_ticks']
         obs_ph, keep_prob_ph, logits, probs, state_value = build_model(
             policy_input_shape,
-            env.action_space.n)
+            env_spec['action_size'])
         actions_taken_ph = tf.placeholder('int32')
         avg_len_episode_ph = tf.placeholder('float')
         avg_episode_reward_ph = tf.placeholder('float')
@@ -198,23 +196,11 @@ def train(env, args, build_model):
             for v in tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES):
                 print v.name
 
-            env_spec = envs.registry.env_specs[args['env']]
-            print '* environment', args['env']
-            print 'observation space', env.observation_space
-            print 'action space', env.action_space
-            print 'timestep limit', min(env_spec.timestep_limit,
-                                        args['timestep_limit'])
-            print 'reward threshold', env_spec.reward_threshold
-
             # stochastic policy
             policy = lambda obs: probs.eval(feed_dict={
                 obs_ph: [obs],
                 keep_prob_ph: 1. - args['dropout_rate'],
             })[0]
-
-            # gym monitor
-            if args['monitor']:
-                env.monitor.start(args['monitor_dir'])
 
             for i in tqdm.tqdm(xrange(args['n_train_steps'])):
                 # on-policy rollout for some episodes
@@ -224,9 +210,10 @@ def train(env, args, build_model):
                 for j in xrange(args['n_update_episodes']):
                     observations, actions, rewards = rollout(
                         policy,
-                        env,
-                        min(env_spec.timestep_limit, args['timestep_limit']),
-                        args['render_env'],
+                        env_spec,
+                        env_step,
+                        env_reset,
+                        env_render,
                         n_obs_ticks=args['n_obs_ticks'],
                     )
                     episodes.append((observations, actions, rewards))
@@ -321,9 +308,6 @@ def train(env, args, build_model):
             saver.save(sess, args['checkpoint_dir'] + '/model',
                        global_step=global_step.eval())
 
-            if args['monitor']:
-                env.monitor.close()
-
 def build_argparser():
     parse = argparse.ArgumentParser()
 
@@ -335,7 +319,12 @@ def build_argparser():
     parse.add_argument('--monitor_dir',
                        default='/tmp/gym-monitor-%i' % time.time())
     parse.add_argument('--n_obs_ticks', type=int, default=1)
-    parse.add_argument('--timestep_limit', type=int, default=1e9)
+    parse.add_argument('--timestep_limit', type=int, default=10**9)
+    parse.add_argument('--use_render_state', action='store_true')
+    parse.add_argument('--scale', type=float, default=1.)
+    parse.add_argument('--interpolation', choices=['nearest', 'bilinear',
+                                                   'bicubic', 'cubic'],
+                       default='nearest')
 
     # objective options
     parse.add_argument('--objective', choices=['episodic_reward',
@@ -350,7 +339,7 @@ def build_argparser():
     parse.add_argument('--checkpoint_dir', required=True)
     parse.add_argument('--no_summary', action='store_true')
     parse.add_argument('--summary_prefix', default='')
-    parse.add_argument('--render_env', action='store_true')
+    parse.add_argument('--render', action='store_true')
 
     # how many episodes to rollout before update parameters
     parse.add_argument('--n_update_episodes', type=int, default=4)
@@ -382,15 +371,39 @@ def build_argparser():
 
 if __name__ == '__main__':
     from functools import partial
+    from util import passthrough, use_render_state
 
     # arguments
     parse = build_argparser()
     args = parse.parse_args()
 
-    env = gym.make(args.env)
+    gym_env = gym.make(args.env)
+    if args.use_render_state:
+        env_spec, env_step, env_reset, env_render = use_render_state(
+            gym_env, args.scale, args.interpolation)
+    else:
+        env_spec, env_step, env_reset, env_render = passthrough(gym_env)
+
+    env_spec['timestep_limit'] = min(gym_env.spec.timestep_limit,
+                                     args.timestep_limit)
+    env_render = env_render if args.render else None
+
+    print '* environment', args.env
+    print 'observation shape', env_spec['observation_shape']
+    print 'action space', gym_env.action_space
+    print 'timestep limit', env_spec['timestep_limit']
+    print 'reward threshold', gym_env.spec.reward_threshold
 
     # model
     model = importlib.import_module('models.%s' % args.model)
 
     # train
-    train(env, vars(args), model.build_model)
+    # gym monitor
+    if args.monitor:
+        env.monitor.start(args['monitor_dir'])
+
+    train(env_spec, env_step, env_reset, env_render, vars(args),
+          model.build_model)
+
+    if args.monitor:
+        env.monitor.close()
