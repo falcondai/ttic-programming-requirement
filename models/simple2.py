@@ -1,8 +1,8 @@
 import tensorflow as tf
 import numpy as np
 
-def build_model(dim_observation, dim_action, batch=None):
-    obs_ph = tf.placeholder('float', [batch, dim_observation], name='observation')
+def build_model(observation_shape, dim_action, batch=None):
+    obs_ph = tf.placeholder('float', [batch] + list(observation_shape), name='observation')
     keep_prob_ph = tf.placeholder('float', name='keep_prob')
     tf.add_to_collection('inputs', obs_ph)
     tf.add_to_collection('inputs', keep_prob_ph)
@@ -10,7 +10,7 @@ def build_model(dim_observation, dim_action, batch=None):
     with tf.variable_scope('model'):
         fc1 = tf.contrib.layers.fully_connected(
             # inputs=tf.nn.dropout(obs_ph, keep_prob_ph),
-            inputs = obs_ph,
+            inputs=obs_ph,
             num_outputs=64,
             biases_initializer=tf.zeros_initializer,
             weights_initializer=tf.contrib.layers.xavier_initializer(),
@@ -21,7 +21,7 @@ def build_model(dim_observation, dim_action, batch=None):
 
         fc2 = tf.contrib.layers.fully_connected(
             # inputs=tf.nn.dropout(obs_ph, keep_prob_ph),
-            inputs = fc1,
+            inputs=fc1,
             num_outputs=dim_action,
             biases_initializer=tf.zeros_initializer,
             weights_initializer=tf.contrib.layers.xavier_initializer(),

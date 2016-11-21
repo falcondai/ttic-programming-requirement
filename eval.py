@@ -10,7 +10,7 @@ import gym
 from gym import envs
 from train import rollout, vector_slice
 
-def restore_vars(sess, checkpoint_path, meta_path):
+def test_restore_vars(sess, checkpoint_path, meta_path):
     """ Restore saved net, global score and step, and epsilons OR
     create checkpoint directory for later storage. """
     saver = tf.train.import_meta_graph(meta_path)
@@ -21,17 +21,23 @@ def restore_vars(sess, checkpoint_path, meta_path):
     saver.restore(sess, checkpoint_path)
     return True
 
-def to_argmax(policy_prob_func, obs):
+def to_greedy(policy_prob_func, obs):
     ps = policy_prob_func(obs)
     z = np.zeros(ps.shape)
     z[np.argmax(ps)] = 1.
     return z
 
+def to_epsilon_greedy(epsilon, policy_prob_func, obs):
+    ps = policy_prob_func(obs)
+    z = np.zeros(ps.shape) + epsilon / len(ps)
+    z[np.argmax(ps)] += 1. - epsilon
+    return z
+
 def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples,
-             use_argmax, n_obs_ticks):
+             policy_type, n_obs_ticks, epsilon):
     with tf.Graph().as_default() as g:
         with tf.Session() as sess:
-            restore_vars(sess, checkpoint_path, meta_path)
+            test_restore_vars(sess, checkpoint_path, meta_path)
 
             # model
             obs_ph, keep_prob_ph = tf.get_collection('inputs')
@@ -55,25 +61,34 @@ def evaluate(checkpoint_path, meta_path, env_id, render_env, n_samples,
             episode_lengths = []
 
             # policy function
-            if use_argmax:
-                policy = partial(to_argmax, lambda obs: probs.eval(feed_dict={
+            if policy_type == 'greedy':
+                print '* greedy policy'
+                policy = partial(to_greedy, lambda obs: probs.eval(feed_dict={
                     obs_ph: [obs],
                     keep_prob_ph: 1.,
                 })[0])
+            elif policy_type == 'epsilon_greedy':
+                print '* epsilon-greedy policy with epsilon', epsilon
+                policy = partial(to_epsilon_greedy, epsilon, lambda obs:
+                    probs.eval(feed_dict={
+                        obs_ph: [obs],
+                        keep_prob_ph: 1.,
+                    })[0])
             else:
+                print '* stochastic policy'
                 policy = lambda obs: probs.eval(feed_dict={
                     obs_ph: [obs],
                     keep_prob_ph: 1.,
                 })[0]
 
-            obj_val = []
             for i in tqdm.tqdm(xrange(n_samples)):
                 # rollout with policy
-                observations, actions, rewards, done = rollout(
+                observations, actions, rewards = rollout(
                     policy,
                     env,
                     spec.timestep_limit,
                     render_env,
+                    n_obs_ticks,
                 )
                 episode_rewards.append(np.sum(rewards))
                 episode_lengths.append(len(observations))
@@ -110,7 +125,9 @@ if __name__ == '__main__':
     parse.add_argument('--no_render', action='store_true')
     parse.add_argument('--n_samples', type=int, default=16)
     parse.add_argument('--env', default='CartPole-v0')
-    parse.add_argument('--argmax', action='store_true')
+    parse.add_argument('--policy', choices=['greedy', 'epsilon_greedy',
+                                            'sample'], default='sample')
+    parse.add_argument('--epsilon', type=float, default=1e-5)
     parse.add_argument('--n_obs_ticks', type=int, default=1)
 
     args = parse.parse_args()
@@ -127,4 +144,4 @@ if __name__ == '__main__':
         meta_path = args.meta_path
 
     evaluate(checkpoint_path, meta_path, args.env, not args.no_render,
-             args.n_samples, args.argmax, args.n_obs_ticks)
+             args.n_samples, args.policy, args.n_obs_ticks, args.epsilon)

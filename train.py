@@ -3,6 +3,7 @@
 import tensorflow as tf
 import numpy as np
 import os, sys, cPickle, time, glob, itertools, json
+from Queue import deque
 import tqdm
 import argparse
 import importlib
@@ -38,28 +39,39 @@ def wrapped_env(env, output_state, output_image):
 def load_rollout(data_dir):
     pass
 
-def rollout(behavior_policy, env, max_t, render_env=False, reset_env=True,
-            last_obs=None):
-    '''rollout based on behavior policy with options to continue from
-    an existing environment'''
-    if reset_env:
-        obs = env.reset()
-    else:
-        obs = last_obs
+def pad_zeros(obs, n_obs_ticks):
+    return [np.zeros(obs[0].shape)] * (n_obs_ticks - 1) + obs
+
+def duplicate_obs(observations, n_obs_ticks):
+    obs_q = []
+    l = len(observations)
+    for i in xrange(n_obs_ticks):
+        obs_q.append(observations[i:l-n_obs_ticks+i+1])
+    return np.concatenate(obs_q, axis=-1)
+
+def rollout(behavior_policy, env, max_t, render_env=False, n_obs_ticks=1):
+    '''rollout based on behavior policy from an environment'''
+    # pad the first observation with zeros
+    obs = env.reset()
+    obs_q = deque(pad_zeros([obs], n_obs_ticks), n_obs_ticks)
+
     observations, actions, rewards = [], [], []
     done = False
     t = 0
     while not done and t < max_t:
-        action_probs = behavior_policy(obs)
+        policy_input = np.concatenate(obs_q, axis=-1)
+        action_probs = behavior_policy(policy_input)
         action = np.random.choice(env.action_space.n, p=action_probs)
+        obs_q.popleft()
         observations.append(obs)
         actions.append(action)
         obs, reward, done, info = env.step(action)
         rewards.append(reward)
+        obs_q.append(obs)
         if render_env:
             env.render()
         t += 1
-    return observations, actions, rewards, done
+    return observations, actions, rewards
 
 def vector_slice(A, B):
     """ Returns values of rows i of A at column B[i]
@@ -102,8 +114,10 @@ def train(env, args, build_model):
     with tf.Graph().as_default() as g:
         # model
         print '* building model %s' % args['model']
+        policy_input_shape = list(env.observation_space.shape)
+        policy_input_shape[-1] *= args['n_obs_ticks']
         obs_ph, keep_prob_ph, logits, probs, state_value = build_model(
-            env.observation_space.shape[0],
+            policy_input_shape,
             env.action_space.n)
         actions_taken_ph = tf.placeholder('int32')
         avg_len_episode_ph = tf.placeholder('float')
@@ -135,30 +149,25 @@ def train(env, args, build_model):
             optimizer = tf.train.AdamOptimizer(learning_rate,
                                                args['adam_beta1'],
                                                args['adam_beta2'],
-                                               args['adam_epsilon'],
-                                              )
+                                               args['adam_epsilon'])
         elif args['optimizer'] == 'ag':
             optimizer = tf.train.MomentumOptimizer(learning_rate,
                                                    args['momentum'],
-                                                   use_nesterov=True,
-                                                  )
+                                                   use_nesterov=True)
         elif args['optimizer'] == 'rmsprop':
             optimizer = tf.train.RMSPropOptimizer(learning_rate,
                                                    args['rmsprop_decay'],
                                                    args['momentum'],
-                                                   args['rmsprop_epsilon'],
-                                                  )
+                                                   args['rmsprop_epsilon'])
         else:
             optimizer = tf.train.MomentumOptimizer(learning_rate,
-                                                   args['momentum'],
-                                                  )
+                                                   args['momentum'])
 
         # train ops
         grad_vars = optimizer.compute_gradients(-objective)
         update_policy_op = optimizer.apply_gradients(
             grad_vars,
-            global_step=global_step,
-        )
+            global_step=global_step)
 
         # summary
         if not args['no_summary']:
@@ -169,7 +178,6 @@ def train(env, args, build_model):
             tf.scalar_summary('average_tick_reward', avg_tick_reward_ph)
             tf.scalar_summary('average_episode_length', avg_len_episode_ph)
             tf.scalar_summary('average_tick_regularization', avg_reg_ph)
-            # tf.scalar_summary('objective', objective)
 
             print '* extra summary'
             for g, v in grad_vars:
@@ -194,7 +202,8 @@ def train(env, args, build_model):
             print '* environment', args['env']
             print 'observation space', env.observation_space
             print 'action space', env.action_space
-            print 'timestep limit', env_spec.timestep_limit
+            print 'timestep limit', min(env_spec.timestep_limit,
+                                        args['timestep_limit'])
             print 'reward threshold', env_spec.reward_threshold
 
             # stochastic policy
@@ -213,12 +222,12 @@ def train(env, args, build_model):
                 n_ticks = 0
                 episode_rewards = []
                 for j in xrange(args['n_update_episodes']):
-                    observations, actions, rewards, done = rollout(
+                    observations, actions, rewards = rollout(
                         policy,
                         env,
-                        env_spec.timestep_limit,
+                        min(env_spec.timestep_limit, args['timestep_limit']),
                         args['render_env'],
-                        reset_env=True,
+                        n_obs_ticks=args['n_obs_ticks'],
                     )
                     episodes.append((observations, actions, rewards))
                     n_ticks += len(observations)
@@ -233,28 +242,33 @@ def train(env, args, build_model):
                 f_vals = []
                 for observations, actions, rewards in episodes:
                     len_episode = len(observations)
-                    obs += observations
+                    obs += list(duplicate_obs(pad_zeros(observations,
+                                                        args['n_obs_ticks']),
+                                              args['n_obs_ticks']))
                     action_inds += actions
                     # compute the objective values
                     if args['objective'] == 'episodic_reward':
                         # total episodic reward with lambda decay over ticks
                         f_vals += [np.sum(np.prod([
                             rewards,
-                            [args['reward_lambda']**t for t in xrange(len_episode)]],
+                            [args['reward_lambda']**t
+                             for t in xrange(len_episode)]],
                             axis=0))
                         ] * len_episode
                     elif args['objective'] == 'reward_to_go':
                         # rewards to go with lambda decay
                         f_vals += [np.sum(np.prod([
                             rewards[t:],
-                            [args['reward_lambda']**u for u in xrange(len_episode-t)]],
+                            [args['reward_lambda']**u
+                             for u in xrange(len_episode-t)]],
                             axis=0))
                         for t in xrange(len_episode)]
                     else:
                         # rewards to go with lambda decay and baseline
                         f_vals += [np.sum(np.prod([
                             rewards[t:],
-                            [args['reward_lambda']**u for u in xrange(len_episode-t)]],
+                            [args['reward_lambda']**u
+                             for u in xrange(len_episode-t)]],
                             axis=0)) - avg_tick_reward * (len_episode-t)
                         for t in xrange(len_episode)]
 
@@ -320,6 +334,8 @@ def build_argparser():
     parse.add_argument('--monitor', action='store_true')
     parse.add_argument('--monitor_dir',
                        default='/tmp/gym-monitor-%i' % time.time())
+    parse.add_argument('--n_obs_ticks', type=int, default=1)
+    parse.add_argument('--timestep_limit', type=int, default=1e9)
 
     # objective options
     parse.add_argument('--objective', choices=['episodic_reward',
@@ -339,8 +355,8 @@ def build_argparser():
     # how many episodes to rollout before update parameters
     parse.add_argument('--n_update_episodes', type=int, default=4)
     parse.add_argument('--n_batch_ticks', type=int, default=128)
-    parse.add_argument('--n_save_interval', type=int, default=128)
-    parse.add_argument('--n_train_steps', type=int, default=1e5)
+    parse.add_argument('--n_save_interval', type=int, default=1)
+    parse.add_argument('--n_train_steps', type=int, default=10**5)
 
     # optimizer options
     parse.add_argument('--momentum', type=float, default=0.2)
