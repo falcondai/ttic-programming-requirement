@@ -43,10 +43,6 @@ def evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
             obs_ph, keep_prob_ph = tf.get_collection('inputs')
             logits, probs = tf.get_collection('outputs')
 
-            actions_taken_ph = tf.placeholder('int32')
-            action_logits = vector_slice(tf.log(probs), actions_taken_ph)
-            observed_reward_ph = tf.placeholder('float')
-
             # evaluation
             episode_rewards = []
             episode_lengths = []
