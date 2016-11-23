@@ -3,12 +3,12 @@
 import tensorflow as tf
 import numpy as np
 import os, sys, cPickle, time, glob, itertools, json
-from Queue import deque
 import tqdm
 import argparse
 import importlib
 import gym
-from util import pad_zeros, duplicate_obs, rollout, vector_slice
+from util import vector_slice, rollout, pad_zeros, duplicate_obs,\
+    to_epsilon_greedy
 
 def get_current_run_id(checkpoint_dir):
     paths = glob.glob('%s/hyperparameters.*.json' % checkpoint_dir)
@@ -17,8 +17,8 @@ def get_current_run_id(checkpoint_dir):
     return sorted(map(lambda p: int(p.split('.')[-2]), paths))[-1] + 1
 
 def restore_vars(saver, sess, checkpoint_dir, restart=False):
-    ''' Restore saved net, global score and step, and epsilons OR
-    create checkpoint directory for later storage. '''
+    '''Restore saved net, global score and step, and epsilons OR
+    create checkpoint directory for later storage.'''
     sess.run(tf.initialize_all_variables())
 
     if not restart:
@@ -36,7 +36,7 @@ def restore_vars(saver, sess, checkpoint_dir, restart=False):
 def load_rollout(data_dir):
     pass
 
-def train(env_spec, env_step, env_reset, env_render, args, build_model):
+def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
     summary_dir = 'tf-log/%s%d-%s' % (args['summary_prefix'], time.time(),
                                       os.path.basename(args['checkpoint_dir']))
 
@@ -64,34 +64,67 @@ def train(env_spec, env_step, env_reset, env_render, args, build_model):
         print '* building model %s' % args['model']
         policy_input_shape = list(env_spec['observation_shape'])
         policy_input_shape[-1] *= args['n_obs_ticks']
-        obs_ph, keep_prob_ph, logits, probs, state_value = build_model(
+
+        current_q_model_scope = 'current_q_model'
+        obs_ph, keep_prob_ph, action_values = build_q_model(
             policy_input_shape,
-            env_spec['action_size'])
-        actions_taken_ph = tf.placeholder('int32')
+            env_spec['action_size'],
+            scope=current_q_model_scope)
+
+        target_q_model_scope = 'target_q_model'
+        next_obs_ph, _, next_action_values = build_q_model(
+            policy_input_shape,
+            env_spec['action_size'],
+            trainable=False,
+            scope=target_q_model_scope)
+
+        # ops to update target Q model
+        update_target_q_op = []
+        for cv in tf.contrib.framework.get_variables(scope=current_q_model_scope):
+            tv_name = target_q_model_scope + cv.name[len(current_q_model_scope):]
+            # XXX bug of tf.contrib.framework? the handling of suffix
+            tv = tf.contrib.framework.get_unique_variable(tv_name[:-2])
+            update_target_q_op.append(tv.assign(cv))
+
+        action_ph = tf.placeholder('int32')
+        reward_ph = tf.placeholder('float')
+        next_action_ph = tf.placeholder('int32')
+        nonterminal_ph = tf.placeholder('float')
+
         avg_len_episode_ph = tf.placeholder('float')
         avg_episode_reward_ph = tf.placeholder('float')
         max_episode_reward_ph = tf.placeholder('float')
         min_episode_reward_ph = tf.placeholder('float')
         avg_tick_reward_ph = tf.placeholder('float')
-        avg_reg_ph = tf.placeholder('float')
+        avg_objective_ph = tf.placeholder('float')
+        epsilon_ph = tf.placeholder('float')
 
-        # expected reward under policy
-        # entropy regularizer to encourage action diversity
-        entropy_reg = - tf.reduce_mean(tf.reduce_sum(probs * tf.log(probs), 1))
-        action_logits = vector_slice(tf.log(probs), actions_taken_ph)
-        advantage_ph = tf.placeholder('float')
+        if args['objective'] == 'sarsa':
+            # SARSA
+            # r + gamma * Q(s', a'), where s', a' are the observed
+            # according to behavior policy
+            target = reward_ph + nonterminal_ph * args['reward_gamma'] \
+                * vector_slice(next_action_values, next_action_ph)
+        else:
+            # Q-learning
+            # r + gamma * max_a' Q(s', a'), where s' is the observed
+            # according to behavior policy
+            target = reward_ph + nonterminal_ph * args['reward_gamma'] \
+                * tf.stop_gradient(tf.reduce_max(next_action_values, 1))
+
+        # action values over observed Q(s, a)
+        Q_sa = vector_slice(action_values, action_ph)
 
         # with rewards to go and baseline
-        objective = tf.reduce_sum(action_logits * advantage_ph) \
-            + args['reg_coeff'] * entropy_reg
+        objective = tf.reduce_sum(tf.square(Q_sa - target))
 
         # optimization
         global_step = tf.Variable(0, trainable=False, name='global_step')
         learning_rate = tf.train.exponential_decay(
             args['initial_learning_rate'],
-            global_step, args['n_decay_steps'],
-            args['decay_rate'],
-            staircase=not args['no_decay_staircase'])
+            global_step, args['n_lr_decay_steps'],
+            args['lr_decay_rate'],
+            staircase=not args['no_lr_decay_staircase'])
 
         if args['optimizer'] == 'adam':
             optimizer = tf.train.AdamOptimizer(learning_rate,
@@ -104,28 +137,30 @@ def train(env_spec, env_step, env_reset, env_render, args, build_model):
                                                    use_nesterov=True)
         elif args['optimizer'] == 'rmsprop':
             optimizer = tf.train.RMSPropOptimizer(learning_rate,
-                                                   args['rmsprop_decay'],
-                                                   args['momentum'],
-                                                   args['rmsprop_epsilon'])
+                                                  args['rmsprop_decay'],
+                                                  args['momentum'],
+                                                  args['rmsprop_epsilon'])
         else:
             optimizer = tf.train.MomentumOptimizer(learning_rate,
                                                    args['momentum'])
 
         # train ops
-        grad_vars = optimizer.compute_gradients(-objective)
-        update_policy_op = optimizer.apply_gradients(
+        grad_vars = optimizer.compute_gradients(objective)
+        update_q_op = optimizer.apply_gradients(
             grad_vars,
             global_step=global_step)
 
         # summary
         if not args['no_summary']:
             tf.scalar_summary('learning_rate', learning_rate)
-            tf.scalar_summary('average_episode_reward', avg_episode_reward_ph)
+            tf.scalar_summary('average_episode_reward',
+                              avg_episode_reward_ph)
             tf.scalar_summary('max_episode_reward', max_episode_reward_ph)
             tf.scalar_summary('min_episode_reward', min_episode_reward_ph)
             tf.scalar_summary('average_tick_reward', avg_tick_reward_ph)
             tf.scalar_summary('average_episode_length', avg_len_episode_ph)
-            tf.scalar_summary('average_tick_regularization', avg_reg_ph)
+            tf.scalar_summary('average_objective', avg_objective_ph)
+            tf.scalar_summary('epsilon', epsilon_ph)
 
             print '* extra summary'
             for g, v in grad_vars:
@@ -134,7 +169,8 @@ def train(env_spec, env_step, env_reset, env_render, args, build_model):
 
             summary_op = tf.merge_all_summaries()
 
-        saver = tf.train.Saver(max_to_keep=2, keep_checkpoint_every_n_hours=1)
+        saver = tf.train.Saver(max_to_keep=2,
+                               keep_checkpoint_every_n_hours=1)
         with tf.Session() as sess:
             if not args['no_summary']:
                 writer = tf.train.SummaryWriter(summary_dir, sess.graph,
@@ -146,20 +182,30 @@ def train(env_spec, env_step, env_reset, env_render, args, build_model):
             for v in tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES):
                 print v.name
 
-            # stochastic policy
-            policy = lambda obs: probs.eval(feed_dict={
-                obs_ph: [obs],
-                keep_prob_ph: 1. - args['dropout_rate'],
-            })[0]
+            # epsilon-greedy policy based on current Q
+            policy = lambda epsilon, obs: to_epsilon_greedy(
+                epsilon,
+                lambda _obs: action_values.eval(feed_dict={
+                     obs_ph: [_obs],
+                     keep_prob_ph: 1. - args['dropout_rate'],
+                })[0],
+                obs)
 
             for i in tqdm.tqdm(xrange(args['n_train_steps'])):
                 # on-policy rollout for some episodes
                 episodes = []
                 n_ticks = 0
                 episode_rewards = []
+                epsilon = args['initial_epsilon'] / (1. + args['epsilon_decay_rate'] * global_step.eval())
+
+                # update target Q model
+                if i % args['n_update_target_interval'] == 0:
+                    sess.run(update_target_q_op)
+
+                # sample rollouts
                 for j in xrange(args['n_update_episodes']):
                     observations, actions, rewards = rollout(
-                        policy,
+                        partial(policy, epsilon),
                         env_spec,
                         env_step,
                         env_reset,
@@ -176,75 +222,64 @@ def train(env_spec, env_step, env_reset, env_render, args, build_model):
                 # transform and preprocess the rollouts
                 obs = []
                 action_inds = []
-                f_vals = []
+                all_rewards = []
+                nonterminals = []
+                next_obs = []
+                next_action_inds = []
+
+                # process rollouts
                 for observations, actions, rewards in episodes:
                     len_episode = len(observations)
-                    obs += list(duplicate_obs(pad_zeros(observations,
+                    dup_obs = list(duplicate_obs(pad_zeros(observations,
                                                         args['n_obs_ticks']),
                                               args['n_obs_ticks']))
+                    obs += dup_obs
                     action_inds += actions
-                    # compute the objective values
-                    if args['objective'] == 'episodic_reward':
-                        # total episodic reward with lambda decay over ticks
-                        f_vals += [np.sum(np.prod([
-                            rewards,
-                            [args['reward_gamma']**t
-                             for t in xrange(len_episode)]],
-                            axis=0))
-                        ] * len_episode
-                    elif args['objective'] == 'reward_to_go':
-                        # rewards to go with lambda decay
-                        f_vals += [np.sum(np.prod([
-                            rewards[t:],
-                            [args['reward_gamma']**u
-                             for u in xrange(len_episode-t)]],
-                            axis=0))
-                        for t in xrange(len_episode)]
-                    else:
-                        # rewards to go with lambda decay and baseline
-                        f_vals += [np.sum(np.prod([
-                            rewards[t:],
-                            [args['reward_gamma']**u
-                             for u in xrange(len_episode-t)]],
-                            axis=0)) - avg_tick_reward * (len_episode-t)
-                        for t in xrange(len_episode)]
+                    all_rewards += rewards
+                    nonterminals += [1.] * (len_episode - 1) + [0.]
+                    # pad zeros at the terminal tick
+                    next_obs += dup_obs[1:] + [np.zeros(policy_input_shape)]
+                    next_action_inds += actions[1:] + [0]
 
-                # estimate policy gradient by batches
-                # accumulate gradients over batches
+                # estimate and accumulate gradients by batches
+                acc_obj_val = 0.
                 acc_grads = dict([(grad, np.zeros(grad.get_shape()))
                                       for grad, var in grad_vars])
-                acc_reg = 0.
                 n_batch = int(np.ceil(n_ticks * 1. / args['n_batch_ticks']))
                 for j in xrange(n_batch):
                     start = j * args['n_batch_ticks']
                     end = min(start + args['n_batch_ticks'], n_ticks)
                     grad_feed = {
-                        obs_ph: obs[start:end],
                         keep_prob_ph: 1. - args['dropout_rate'],
-                        actions_taken_ph: action_inds[start:end],
-                        advantage_ph: f_vals[start:end],
+                        obs_ph: obs[start:end],
+                        action_ph: action_inds[start:end],
+                        reward_ph: all_rewards[start:end],
+                        next_obs_ph: next_obs[start:end],
+                        next_action_ph: next_action_inds[start:end],
+                        nonterminal_ph: nonterminals[start:end],
                     }
 
-                    # compute the expectation of gradients
-                    grad_vars_val, entropy_reg_val = sess.run([
+                    # sum up gradients
+                    obj_val, grad_vars_val = sess.run([
+                        objective,
                         grad_vars,
-                        entropy_reg,
                         ], feed_dict=grad_feed)
                     for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
-                        acc_grads[g] += g_val / args['n_update_episodes']
-                    acc_reg += entropy_reg_val * (end - start)
+                        acc_grads[g] += g_val * (end - start) / n_ticks
+                    acc_obj_val += obj_val
 
-                # update policy with the sample expectation of gradients
+                # update current Q model
                 update_dict = {
                     avg_len_episode_ph: avg_len_episode,
                     avg_episode_reward_ph: np.mean(episode_rewards),
                     max_episode_reward_ph: np.max(episode_rewards),
                     min_episode_reward_ph: np.min(episode_rewards),
                     avg_tick_reward_ph: avg_tick_reward,
-                    avg_reg_ph: acc_reg / n_ticks,
+                    avg_objective_ph: acc_obj_val / n_ticks,
+                    epsilon_ph: epsilon,
                 }
                 update_dict.update(acc_grads)
-                summary_val, _ = sess.run([summary_op, update_policy_op],
+                summary_val, _ = sess.run([summary_op, update_q_op],
                                           feed_dict=update_dict)
 
                 if not args['no_summary']:
@@ -274,13 +309,11 @@ def build_argparser():
     parse.add_argument('--scale', type=float, default=1.)
     parse.add_argument('--interpolation', choices=['nearest', 'bilinear',
                                                    'bicubic', 'cubic'],
-                       default='bilinear')
+                       default='nearest')
 
     # objective options
-    parse.add_argument('--objective', choices=['episodic_reward',
-                                               'reward_to_go',
-                                               'baseline'],
-                       default='reward_to_go')
+    parse.add_argument('--objective', choices=['sarsa', 'q'],
+                       default='sarsa')
     parse.add_argument('--reg_coeff', type=float, default=0.0001)
     parse.add_argument('--reward_gamma', type=float, default=1.)
     parse.add_argument('--dropout_rate', type=float, default=0.2)
@@ -296,6 +329,7 @@ def build_argparser():
     parse.add_argument('--n_batch_ticks', type=int, default=128)
     parse.add_argument('--n_save_interval', type=int, default=1)
     parse.add_argument('--n_train_steps', type=int, default=10**5)
+    parse.add_argument('--n_update_target_interval', type=int, default=4)
 
     # optimizer options
     parse.add_argument('--momentum', type=float, default=0.2)
@@ -309,9 +343,11 @@ def build_argparser():
     parse.add_argument('--optimizer', choices=['adam', 'momentum', 'ag',
                                                'rmsprop'], default='rmsprop')
     parse.add_argument('--initial_learning_rate', type=float, default=0.001)
-    parse.add_argument('--n_decay_steps', type=int, default=512)
-    parse.add_argument('--no_decay_staircase', action='store_true')
-    parse.add_argument('--decay_rate', type=float, default=0.8)
+    parse.add_argument('--n_lr_decay_steps', type=int, default=512)
+    parse.add_argument('--no_lr_decay_staircase', action='store_true')
+    parse.add_argument('--lr_decay_rate', type=float, default=0.8)
+    parse.add_argument('--initial_epsilon', type=float, default=0.1)
+    parse.add_argument('--epsilon_decay_rate', type=float, default=0.001)
 
     parse.add_argument('--np_seed', type=int, default=123)
     parse.add_argument('--tf_seed', type=int, default=1234)
@@ -352,8 +388,8 @@ if __name__ == '__main__':
     if args.monitor:
         env.monitor.start(args['monitor_dir'])
 
-    train(env_spec, env_step, env_reset, env_render, vars(args),
-          model.build_model)
+    train_q(env_spec, env_step, env_reset, env_render, vars(args),
+          model.build_q_model)
 
     if args.monitor:
         env.monitor.close()

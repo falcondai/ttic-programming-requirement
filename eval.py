@@ -8,7 +8,7 @@ import tqdm
 import argparse
 import gym
 from gym import envs
-from train import rollout, vector_slice
+from util import rollout, vector_slice, to_greedy, to_epsilon_greedy
 
 def test_restore_vars(sess, checkpoint_path, meta_path):
     """ Restore saved net, global score and step, and epsilons OR
@@ -20,18 +20,6 @@ def test_restore_vars(sess, checkpoint_path, meta_path):
     print '* using metagraph from %s' % meta_path
     saver.restore(sess, checkpoint_path)
     return True
-
-def to_greedy(policy_prob_func, obs):
-    ps = policy_prob_func(obs)
-    z = np.zeros(ps.shape)
-    z[np.argmax(ps)] = 1.
-    return z
-
-def to_epsilon_greedy(epsilon, policy_prob_func, obs):
-    ps = policy_prob_func(obs)
-    z = np.zeros(ps.shape) + epsilon / len(ps)
-    z[np.argmax(ps)] += 1. - epsilon
-    return z
 
 def evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
              env_render, n_samples, policy_type, n_obs_ticks, epsilon):

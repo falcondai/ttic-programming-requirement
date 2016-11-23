@@ -1,5 +1,23 @@
 from scipy.misc import imresize
 from functools import partial
+from Queue import deque
+import numpy as np
+import tensorflow as tf 
+
+def vector_slice(A, B):
+    """ Returns values of rows i of A at column B[i]
+
+    where A is a 2D Tensor with shape [None, D]
+    and B is a 1D Tensor with shape [None]
+    with type int32 elements in [0,D)
+
+    Example:
+      A =[[1,2], B = [0,1], vector_slice(A,B) -> [1,4]
+          [3,4]]
+    """
+    linear_index = (tf.shape(A)[1] * tf.range(0, tf.shape(A)[0]))
+    linear_A = tf.reshape(A, [-1])
+    return tf.gather(linear_A, B + linear_index)
 
 # define an environment as a 4-tuple
 # {
@@ -45,3 +63,51 @@ def use_render_state(gym_env, scale, interpolation='nearest'):
         return si(gym_env.render('rgb_array')), reward, done
 
     return spec, step, reset, gym_env.render
+
+def pad_zeros(obs, n_obs_ticks):
+    return [np.zeros(obs[0].shape)] * (n_obs_ticks - 1) + obs
+
+def duplicate_obs(observations, n_obs_ticks):
+    obs_q = []
+    l = len(observations)
+    for i in xrange(n_obs_ticks):
+        obs_q.append(observations[i:l-n_obs_ticks+i+1])
+    return np.concatenate(obs_q, axis=-1)
+
+def rollout(behavior_policy, env_spec, env_step, env_reset,
+            env_render=None, n_obs_ticks=1):
+    '''rollout based on behavior policy from an environment'''
+    # pad the first observation with zeros
+    obs = env_reset()
+    obs_q = deque(pad_zeros([obs], n_obs_ticks), n_obs_ticks)
+
+    observations, actions, rewards = [], [], []
+    done = False
+    t = 0
+    while not done and t < env_spec['timestep_limit']:
+        policy_input = np.concatenate(obs_q, axis=-1)
+        action_probs = behavior_policy(policy_input)
+        action = np.random.choice(env_spec['action_size'], p=action_probs)
+        obs_q.popleft()
+        observations.append(obs)
+        actions.append(action)
+        obs, reward, done = env_step(action)
+        rewards.append(reward)
+        obs_q.append(obs)
+        if env_render != None:
+            env_render()
+        t += 1
+    return observations, actions, rewards
+
+# policy modifiers
+def to_greedy(policy_prob_func, obs):
+    ps = policy_prob_func(obs)
+    z = np.zeros(ps.shape)
+    z[np.argmax(ps)] = 1.
+    return z
+
+def to_epsilon_greedy(epsilon, policy_prob_func, obs):
+    ps = policy_prob_func(obs)
+    z = np.zeros(ps.shape) + epsilon / len(ps)
+    z[np.argmax(ps)] += 1. - epsilon
+    return z
