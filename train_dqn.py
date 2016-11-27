@@ -66,17 +66,17 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
         policy_input_shape[-1] *= args['n_obs_ticks']
 
         current_q_model_scope = 'current_q_model'
-        obs_ph, keep_prob_ph, action_values = build_q_model(
-            policy_input_shape,
-            env_spec['action_size'],
-            scope=current_q_model_scope)
+        with tf.variable_scope(current_q_model_scope):
+            obs_ph, keep_prob_ph, action_values = build_q_model(
+                policy_input_shape,
+                env_spec['action_size'])
 
         target_q_model_scope = 'target_q_model'
-        next_obs_ph, _, next_action_values = build_q_model(
-            policy_input_shape,
-            env_spec['action_size'],
-            trainable=False,
-            scope=target_q_model_scope)
+        with tf.variable_scope(target_q_model_scope):
+            next_obs_ph, _, next_action_values = build_q_model(
+                policy_input_shape,
+                env_spec['action_size'],
+                trainable=False)
 
         # ops to update target Q model
         update_target_q_op = []
@@ -110,12 +110,12 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
             # r + gamma * max_a' Q(s', a'), where s' is the observed
             # according to behavior policy
             target = reward_ph + nonterminal_ph * args['reward_gamma'] \
-                * tf.stop_gradient(tf.reduce_max(next_action_values, 1))
+                * tf.reduce_max(next_action_values, 1)
 
         # action values over observed Q(s, a)
         Q_sa = vector_slice(action_values, action_ph)
 
-        # with rewards to go and baseline
+        # violation of the consistency of Q as objective
         objective = tf.reduce_sum(tf.square(Q_sa - target))
 
         # optimization
