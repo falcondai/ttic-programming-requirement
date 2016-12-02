@@ -100,19 +100,11 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
         avg_objective_ph = tf.placeholder('float')
         epsilon_ph = tf.placeholder('float')
 
-        # if args['objective'] == 'sarsa':
-        #     # SARSA
-        #     # r + gamma * Q(s', a'), where s', a' are the observed
-        #     # according to behavior policy
-        #     target = reward_ph + nonterminal_ph * args['reward_gamma'] \
-        #         * vector_slice(next_action_values, next_action_ph)
-        # else:
-
-        # Q-learning
-        # r + gamma * max_a' Q(s', a'), where s' is the observed
+        # SARSA
+        # r + gamma * Q(s', a'), where s', a' are the observed
         # according to behavior policy
-        # target = reward_ph + nonterminal_ph * args['reward_gamma'] \
-        #     * tf.reduce_max(next_action_values, 1)
+        target = reward_ph + nonterminal_ph * args['reward_gamma'] \
+            * vector_slice(next_action_values, next_action_ph)
 
         # action values over observed Q(s, a)
         Q_sa = vector_slice(action_values, action_ph)
@@ -192,7 +184,6 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                      keep_prob_ph: 1. - args['dropout_rate'],
                 })[0],
                 obs)
-            # policy = lambda epsilon, obs: [0.9, 0.1]
 
             n_update = 1
             for i in tqdm.tqdm(xrange(args['n_train_steps'])):
@@ -258,13 +249,6 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                         # pad zeros at the terminal tick
                         # next_obs += dup_obs[1:] + [np.zeros(policy_input_shape)]
                         # next_action_inds += actions[1:] + [0]
-                # sample a fixed size subset for training
-                # n_ticks = 64
-                sample_ind = np.random.choice(range(len(obs)), n_ticks, False)
-                _obs = np.asarray(obs)[sample_ind]
-                _action_inds = np.asarray(action_inds)[sample_ind]
-                # _all_rewards = np.asarray(all_rewards)[sample_ind]
-                _targets = np.asarray(targets)[sample_ind]
 
                 # estimate and accumulate gradients by batches
                 acc_obj_val = 0.
@@ -276,9 +260,9 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                     end = min(start + args['n_batch_ticks'], n_ticks)
                     grad_feed = {
                         keep_prob_ph: 1. - args['dropout_rate'],
-                        obs_ph: _obs[start:end],
-                        action_ph: _action_inds[start:end],
-                        target_ph: _targets[start:end],
+                        obs_ph: obs[start:end],
+                        action_ph: action_inds[start:end],
+                        target_ph: targets[start:end],
                         # reward_ph: all_rewards[start:end],
                         # next_obs_ph: next_obs[start:end],
                         # next_action_ph: next_action_inds[start:end],
@@ -338,8 +322,6 @@ def build_argparser():
                        default='nearest')
 
     # objective options
-    # parse.add_argument('--objective', choices=['sarsa', 'q'],
-    #                    default='sarsa')
     parse.add_argument('--reg_coeff', type=float, default=0.0001)
     parse.add_argument('--reward_gamma', type=float, default=1.)
     parse.add_argument('--dropout_rate', type=float, default=0.2)
