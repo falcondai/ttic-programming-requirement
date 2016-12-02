@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 
-def build_q_model(observation_shape, dim_action, reuse=False, trainable=True,
+def build_q_model(observation_shape, dim_action, trainable=True,
                   batch=None):
     obs_ph = tf.placeholder('float', [batch] + list(observation_shape), name='observation')
     keep_prob_ph = tf.placeholder('float', name='keep_prob')
@@ -9,7 +9,6 @@ def build_q_model(observation_shape, dim_action, reuse=False, trainable=True,
     tf.add_to_collection('inputs', keep_prob_ph)
 
     fc1 = tf.contrib.layers.fully_connected(
-        # inputs=tf.nn.dropout(obs_ph, keep_prob_ph),
         inputs=obs_ph,
         num_outputs=dim_action,
         biases_initializer=tf.zeros_initializer,

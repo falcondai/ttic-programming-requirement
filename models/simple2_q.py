@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 
-def build_q_model(observation_shape, dim_action, reuse=False, trainable=True,
+def build_q_model(observation_shape, dim_action, trainable=True,
                   batch=None):
     obs_ph = tf.placeholder('float', [batch] + list(observation_shape), name='observation')
     keep_prob_ph = tf.placeholder('float', name='keep_prob')

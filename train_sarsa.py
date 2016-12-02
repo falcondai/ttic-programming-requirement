@@ -71,26 +71,15 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                 policy_input_shape,
                 env_spec['action_size'])
 
-        # target_q_model_scope = 'target_q_model'
-        # with tf.variable_scope(target_q_model_scope):
-        #     next_obs_ph, _, next_action_values = build_q_model(
-        #         policy_input_shape,
-        #         env_spec['action_size'],
-        #         trainable=False)
-
-        # ops to update target Q model
-        # update_target_q_op = []
-        # for cv in tf.contrib.framework.get_variables(scope=current_q_model_scope):
-        #     tv_name = target_q_model_scope + cv.name[len(current_q_model_scope):]
-        #     # XXX bug of tf.contrib.framework? the handling of suffix
-        #     tv = tf.contrib.framework.get_unique_variable(tv_name[:-2])
-        #     update_target_q_op.append(tv.assign(cv))
+        with tf.variable_scope(current_q_model_scope, reuse=True):
+            next_obs_ph, _, next_action_values = build_q_model(
+                policy_input_shape,
+                env_spec['action_size'])
 
         action_ph = tf.placeholder('int32')
         reward_ph = tf.placeholder('float')
         next_action_ph = tf.placeholder('int32')
         nonterminal_ph = tf.placeholder('float')
-        target_ph = tf.placeholder('float')
 
         avg_len_episode_ph = tf.placeholder('float')
         avg_episode_reward_ph = tf.placeholder('float')
@@ -110,7 +99,7 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
         Q_sa = vector_slice(action_values, action_ph)
 
         # violation of the consistency of Q as objective
-        objective = tf.reduce_sum(tf.square(target_ph - Q_sa))
+        objective = tf.reduce_sum(tf.square(tf.stop_gradient(target) - Q_sa))
 
         # optimization
         global_step = tf.Variable(0, trainable=False, name='global_step')
@@ -185,70 +174,52 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                 })[0],
                 obs)
 
-            n_update = 1
             for i in tqdm.tqdm(xrange(args['n_train_steps'])):
-                if i % n_update == 0:
-                    # on-policy rollout for some episodes
-                    episodes = []
-                    n_ticks = 0
-                    episode_rewards = []
-                    epsilon = args['initial_epsilon'] / (1. + args['epsilon_decay_rate'] * global_step.eval())
+                # on-policy rollout for some episodes
+                episodes = []
+                n_ticks = 0
+                episode_rewards = []
+                epsilon = args['initial_epsilon'] / (1. + args['epsilon_decay_rate'] * global_step.eval())
 
-                    # update target Q model
-                    # if i % args['n_update_target_interval'] == 0:
-                    #     sess.run(update_target_q_op)
+                # sample rollouts
+                for j in xrange(args['n_update_episodes']):
+                    observations, actions, rewards = rollout(
+                        partial(policy, epsilon),
+                        env_spec,
+                        env_step,
+                        env_reset,
+                        env_render,
+                        n_obs_ticks=args['n_obs_ticks'],
+                    )
+                    episodes.append((observations, actions, rewards))
+                    n_ticks += len(observations)
+                    episode_rewards.append(np.sum(rewards))
 
-                    # sample rollouts
-                    for j in xrange(args['n_update_episodes']):
-                        observations, actions, rewards = rollout(
-                            partial(policy, epsilon),
-                            env_spec,
-                            env_step,
-                            env_reset,
-                            env_render,
-                            n_obs_ticks=args['n_obs_ticks'],
-                        )
-                        episodes.append((observations, actions, rewards))
-                        n_ticks += len(observations)
-                        episode_rewards.append(np.sum(rewards))
+                avg_len_episode = n_ticks * 1. / args['n_update_episodes']
+                avg_tick_reward = np.sum(episode_rewards) * 1. / n_ticks
 
-                    avg_len_episode = n_ticks * 1. / args['n_update_episodes']
-                    avg_tick_reward = np.sum(episode_rewards) * 1. / n_ticks
+                # transform and preprocess the rollouts
+                obs = []
+                action_inds = []
+                all_rewards = []
+                nonterminals = []
+                next_obs = []
+                next_action_inds = []
+                # targets = []
 
-                    # transform and preprocess the rollouts
-                    obs = []
-                    action_inds = []
-                    all_rewards = []
-                    # nonterminals = []
-                    # next_obs = []
-                    # next_action_inds = []
-                    targets = []
-
-                    # process rollouts
-                    for observations, actions, rewards in episodes:
-                        len_episode = len(observations)
-                        dup_obs = list(duplicate_obs(pad_zeros(observations,
-                                                            args['n_obs_ticks']),
-                                                  args['n_obs_ticks']))
-                        obs += dup_obs
-                        action_inds += actions
-                        all_rewards += rewards
-                        # if args['objective'] == 'sarsa':
-                        targets += list(np.asarray(rewards[:-1]) + args['reward_gamma'] * Q_sa.eval(feed_dict={
-                            obs_ph: dup_obs[1:],
-                            keep_prob_ph: 1.,
-                            action_ph: actions[1:],
-                        })) + rewards[-1:]
-                        # else:
-                        # targets += list(np.asarray(rewards[:-1]) + args['reward_gamma'] * action_values.eval(feed_dict={
-                        #     obs_ph: dup_obs[1:],
-                        #     keep_prob_ph: 1.,
-                        # }).max(axis=1)) + rewards[-1:]
-
-                        # nonterminals += [1.] * (len_episode - 1) + [0.]
-                        # pad zeros at the terminal tick
-                        # next_obs += dup_obs[1:] + [np.zeros(policy_input_shape)]
-                        # next_action_inds += actions[1:] + [0]
+                # process rollouts
+                for observations, actions, rewards in episodes:
+                    len_episode = len(observations)
+                    dup_obs = list(duplicate_obs(pad_zeros(observations,
+                                                        args['n_obs_ticks']),
+                                              args['n_obs_ticks']))
+                    obs += dup_obs
+                    action_inds += actions
+                    all_rewards += rewards
+                    nonterminals += [1.] * (len_episode - 1) + [0.]
+                    # pad zeros at the terminal tick
+                    next_obs += dup_obs[1:] + [np.zeros(policy_input_shape)]
+                    next_action_inds += actions[1:] + [0]
 
                 # estimate and accumulate gradients by batches
                 acc_obj_val = 0.
@@ -262,11 +233,10 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                         keep_prob_ph: 1. - args['dropout_rate'],
                         obs_ph: obs[start:end],
                         action_ph: action_inds[start:end],
-                        target_ph: targets[start:end],
-                        # reward_ph: all_rewards[start:end],
-                        # next_obs_ph: next_obs[start:end],
-                        # next_action_ph: next_action_inds[start:end],
-                        # nonterminal_ph: nonterminals[start:end],
+                        reward_ph: all_rewards[start:end],
+                        next_obs_ph: next_obs[start:end],
+                        next_action_ph: next_action_inds[start:end],
+                        nonterminal_ph: nonterminals[start:end],
                     }
 
                     # sum up gradients
