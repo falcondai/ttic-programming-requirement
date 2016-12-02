@@ -192,7 +192,6 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                      keep_prob_ph: 1. - args['dropout_rate'],
                 })[0],
                 obs)
-            # policy = lambda epsilon, obs: [0.9, 0.1]
 
             n_update = 1
             for i in tqdm.tqdm(xrange(args['n_train_steps'])):
@@ -242,17 +241,11 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                         obs += dup_obs
                         action_inds += actions
                         all_rewards += rewards
-                        # if args['objective'] == 'sarsa':
-                        targets += list(np.asarray(rewards[:-1]) + args['reward_gamma'] * Q_sa.eval(feed_dict={
+
+                        targets += list(np.asarray(rewards[:-1]) + args['reward_gamma'] * action_values.eval(feed_dict={
                             obs_ph: dup_obs[1:],
                             keep_prob_ph: 1.,
-                            action_ph: actions[1:],
-                        })) + rewards[-1:]
-                        # else:
-                        # targets += list(np.asarray(rewards[:-1]) + args['reward_gamma'] * action_values.eval(feed_dict={
-                        #     obs_ph: dup_obs[1:],
-                        #     keep_prob_ph: 1.,
-                        # }).max(axis=1)) + rewards[-1:]
+                        }).max(axis=1)) + rewards[-1:]
 
                         # nonterminals += [1.] * (len_episode - 1) + [0.]
                         # pad zeros at the terminal tick
@@ -338,8 +331,6 @@ def build_argparser():
                        default='nearest')
 
     # objective options
-    # parse.add_argument('--objective', choices=['sarsa', 'q'],
-    #                    default='sarsa')
     parse.add_argument('--reg_coeff', type=float, default=0.0001)
     parse.add_argument('--reward_gamma', type=float, default=1.)
     parse.add_argument('--dropout_rate', type=float, default=0.2)
