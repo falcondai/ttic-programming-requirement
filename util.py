@@ -2,7 +2,7 @@ from scipy.misc import imresize
 from functools import partial
 from Queue import deque
 import numpy as np
-import tensorflow as tf 
+import tensorflow as tf
 
 def vector_slice(A, B):
     """ Returns values of rows i of A at column B[i]
@@ -111,3 +111,15 @@ def to_epsilon_greedy(epsilon, policy_prob_func, obs):
     z = np.zeros(ps.shape) + epsilon / len(ps)
     z[np.argmax(ps)] += 1. - epsilon
     return z
+
+# tensorflow utility
+def test_restore_vars(sess, checkpoint_path, meta_path):
+    """ Restore saved net, global score and step, and epsilons OR
+    create checkpoint directory for later storage. """
+    saver = tf.train.import_meta_graph(meta_path)
+    saver.restore(sess, checkpoint_path)
+
+    print '* restoring from %s' % checkpoint_path
+    print '* using metagraph from %s' % meta_path
+    saver.restore(sess, checkpoint_path)
+    return True

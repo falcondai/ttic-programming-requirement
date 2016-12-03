@@ -11,15 +11,16 @@ from gym import envs
 from util import rollout, vector_slice, to_greedy, to_epsilon_greedy, \
                  test_restore_vars
 
-def evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
-             env_render, n_samples, policy_type, n_obs_ticks, epsilon):
+def evaluate_q(checkpoint_path, meta_path, env_spec, env_step, env_reset,
+               env_render, n_samples, policy_type, n_obs_ticks, epsilon):
     with tf.Graph().as_default() as g:
         with tf.Session() as sess:
             test_restore_vars(sess, checkpoint_path, meta_path)
 
             # model
-            obs_ph, keep_prob_ph = tf.get_collection('inputs')
-            logits, probs = tf.get_collection('outputs')
+            # use the current model's inputs and outputs
+            obs_ph, keep_prob_ph = tf.get_collection('inputs')[:2]
+            action_values = tf.get_collection('outputs')[0]
 
             # evaluation
             episode_rewards = []
@@ -28,23 +29,18 @@ def evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
             # policy function
             if policy_type == 'greedy':
                 print '* greedy policy'
-                policy = partial(to_greedy, lambda obs: probs.eval(feed_dict={
-                    obs_ph: [obs],
-                    keep_prob_ph: 1.,
-                })[0])
-            elif policy_type == 'epsilon_greedy':
-                print '* epsilon-greedy policy with epsilon', epsilon
-                policy = partial(to_epsilon_greedy, epsilon, lambda obs:
-                    probs.eval(feed_dict={
+                policy = partial(to_greedy, lambda obs: action_values.eval(
+                    feed_dict={
                         obs_ph: [obs],
                         keep_prob_ph: 1.,
                     })[0])
-            else:
-                print '* stochastic policy'
-                policy = lambda obs: probs.eval(feed_dict={
-                    obs_ph: [obs],
-                    keep_prob_ph: 1.,
-                })[0]
+            elif policy_type == 'epsilon_greedy':
+                print '* epsilon-greedy policy with epsilon', epsilon
+                policy = partial(to_epsilon_greedy, epsilon, lambda obs:
+                    action_values.eval(feed_dict={
+                        obs_ph: [obs],
+                        keep_prob_ph: 1.,
+                    })[0])
 
             for i in tqdm.tqdm(xrange(n_samples)):
                 # rollout with policy
@@ -86,8 +82,8 @@ if __name__ == '__main__':
     parse.add_argument('--no_render', action='store_true')
     parse.add_argument('--n_samples', type=int, default=16)
     parse.add_argument('--env', default='CartPole-v0')
-    parse.add_argument('--policy', choices=['greedy', 'epsilon_greedy',
-                                            'sample'], default='sample')
+    parse.add_argument('--policy', choices=['greedy', 'epsilon_greedy'],
+                       default='epsilon_greedy')
     parse.add_argument('--epsilon', type=float, default=1e-5)
     parse.add_argument('--n_obs_ticks', type=int, default=1)
     parse.add_argument('--timestep_limit', type=int, default=10**9)
@@ -129,6 +125,6 @@ if __name__ == '__main__':
     print 'reward threshold', gym_env.spec.reward_threshold
 
     # eval
-    evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
-             env_render, args.n_samples, args.policy, args.n_obs_ticks,
-             args.epsilon)
+    evaluate_q(checkpoint_path, meta_path, env_spec, env_step, env_reset,
+               env_render, args.n_samples, args.policy, args.n_obs_ticks,
+               args.epsilon)

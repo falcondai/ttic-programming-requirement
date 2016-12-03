@@ -71,6 +71,11 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                 policy_input_shape,
                 env_spec['action_size'])
 
+        with tf.variable_scope(current_q_model_scope, reuse=True):
+            next_obs_ph, _, next_action_values = build_q_model(
+                policy_input_shape,
+                env_spec['action_size'])
+
         # target_q_model_scope = 'target_q_model'
         # with tf.variable_scope(target_q_model_scope):
         #     next_obs_ph, _, next_action_values = build_q_model(
@@ -88,9 +93,9 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
 
         action_ph = tf.placeholder('int32')
         reward_ph = tf.placeholder('float')
-        next_action_ph = tf.placeholder('int32')
+        # next_action_ph = tf.placeholder('int32')
         nonterminal_ph = tf.placeholder('float')
-        target_ph = tf.placeholder('float')
+        # target_ph = tf.placeholder('float')
 
         avg_len_episode_ph = tf.placeholder('float')
         avg_episode_reward_ph = tf.placeholder('float')
@@ -111,14 +116,14 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
         # Q-learning
         # r + gamma * max_a' Q(s', a'), where s' is the observed
         # according to behavior policy
-        # target = reward_ph + nonterminal_ph * args['reward_gamma'] \
-        #     * tf.reduce_max(next_action_values, 1)
+        target = reward_ph + nonterminal_ph * args['reward_gamma'] \
+            * tf.reduce_max(next_action_values, 1)
 
         # action values over observed Q(s, a)
         Q_sa = vector_slice(action_values, action_ph)
 
         # violation of the consistency of Q as objective
-        objective = tf.reduce_sum(tf.square(target_ph - Q_sa))
+        objective = tf.reduce_sum(tf.square(tf.stop_gradient(target) - Q_sa))
 
         # optimization
         global_step = tf.Variable(0, trainable=False, name='global_step')
@@ -227,10 +232,8 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                     obs = []
                     action_inds = []
                     all_rewards = []
-                    # nonterminals = []
-                    # next_obs = []
-                    # next_action_inds = []
-                    targets = []
+                    nonterminals = []
+                    next_obs = []
 
                     # process rollouts
                     for observations, actions, rewards in episodes:
@@ -242,22 +245,17 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                         action_inds += actions
                         all_rewards += rewards
 
-                        targets += list(np.asarray(rewards[:-1]) + args['reward_gamma'] * action_values.eval(feed_dict={
-                            obs_ph: dup_obs[1:],
-                            keep_prob_ph: 1.,
-                        }).max(axis=1)) + rewards[-1:]
-
-                        # nonterminals += [1.] * (len_episode - 1) + [0.]
+                        nonterminals += [1.] * (len_episode - 1) + [0.]
                         # pad zeros at the terminal tick
-                        # next_obs += dup_obs[1:] + [np.zeros(policy_input_shape)]
-                        # next_action_inds += actions[1:] + [0]
+                        next_obs += dup_obs[1:] + [np.zeros(policy_input_shape)]
+
                 # sample a fixed size subset for training
                 # n_ticks = 64
-                sample_ind = np.random.choice(range(len(obs)), n_ticks, False)
-                _obs = np.asarray(obs)[sample_ind]
-                _action_inds = np.asarray(action_inds)[sample_ind]
+                # sample_ind = np.random.choice(range(len(obs)), n_ticks, False)
+                # _obs = np.asarray(obs)[sample_ind]
+                # _action_inds = np.asarray(action_inds)[sample_ind]
                 # _all_rewards = np.asarray(all_rewards)[sample_ind]
-                _targets = np.asarray(targets)[sample_ind]
+                # _targets = np.asarray(targets)[sample_ind]
 
                 # estimate and accumulate gradients by batches
                 acc_obj_val = 0.
@@ -269,13 +267,11 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                     end = min(start + args['n_batch_ticks'], n_ticks)
                     grad_feed = {
                         keep_prob_ph: 1. - args['dropout_rate'],
-                        obs_ph: _obs[start:end],
-                        action_ph: _action_inds[start:end],
-                        target_ph: _targets[start:end],
-                        # reward_ph: all_rewards[start:end],
-                        # next_obs_ph: next_obs[start:end],
-                        # next_action_ph: next_action_inds[start:end],
-                        # nonterminal_ph: nonterminals[start:end],
+                        obs_ph: obs[start:end],
+                        action_ph: action_inds[start:end],
+                        reward_ph: all_rewards[start:end],
+                        next_obs_ph: next_obs[start:end],
+                        nonterminal_ph: nonterminals[start:end],
                     }
 
                     # sum up gradients
