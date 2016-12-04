@@ -11,69 +11,78 @@ from gym import envs
 from util import rollout, vector_slice, to_greedy, to_epsilon_greedy, \
                  test_restore_vars
 
-def evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
-             env_render, n_samples, policy_type, n_obs_ticks, epsilon):
-    with tf.Graph().as_default() as g:
-        with tf.Session() as sess:
-            test_restore_vars(sess, checkpoint_path, meta_path)
+def load_policy(sess, checkpoint_path, meta_path, model_type, policy_type, epsilon):
+    test_restore_vars(sess, checkpoint_path, meta_path)
 
-            # model
-            obs_ph, keep_prob_ph = tf.get_collection('inputs')
-            logits, probs = tf.get_collection('outputs')
+    if model_type == 'pi':
+        # policy
+        obs_ph, keep_prob_ph = tf.get_collection('inputs')
+        _, probs = tf.get_collection('outputs')
+    else:
+        # use the current Q
+        obs_ph, keep_prob_ph = tf.get_collection('inputs')[:2]
+        action_values = tf.get_collection('outputs')[0]
+        probs = action_values
 
-            # evaluation
-            episode_rewards = []
-            episode_lengths = []
+    # policy function
+    if policy_type == 'greedy':
+        print '* greedy policy'
+        policy = partial(to_greedy, lambda obs: probs.eval(feed_dict={
+            obs_ph: [obs],
+            keep_prob_ph: 1.,
+        })[0])
+    elif policy_type == 'epsilon_greedy':
+        print '* epsilon-greedy policy with epsilon', epsilon
+        policy = partial(to_epsilon_greedy, epsilon, lambda obs:
+            probs.eval(feed_dict={
+                obs_ph: [obs],
+                keep_prob_ph: 1.,
+            })[0])
+    else:
+        if model_type == 'q':
+            print 'ERROR: a stochastic policy induced by Q is not defined.'
+            sys.exit(1)
+        print '* stochastic policy'
+        policy = lambda obs: probs.eval(feed_dict={
+            obs_ph: [obs],
+            keep_prob_ph: 1.,
+        })[0]
+    return policy
 
-            # policy function
-            if policy_type == 'greedy':
-                print '* greedy policy'
-                policy = partial(to_greedy, lambda obs: probs.eval(feed_dict={
-                    obs_ph: [obs],
-                    keep_prob_ph: 1.,
-                })[0])
-            elif policy_type == 'epsilon_greedy':
-                print '* epsilon-greedy policy with epsilon', epsilon
-                policy = partial(to_epsilon_greedy, epsilon, lambda obs:
-                    probs.eval(feed_dict={
-                        obs_ph: [obs],
-                        keep_prob_ph: 1.,
-                    })[0])
-            else:
-                print '* stochastic policy'
-                policy = lambda obs: probs.eval(feed_dict={
-                    obs_ph: [obs],
-                    keep_prob_ph: 1.,
-                })[0]
+def evaluate(env_spec, env_step, env_reset,
+             env_render, n_samples, n_obs_ticks, policy):
+    # evaluation
+    episode_rewards = []
+    episode_lengths = []
 
-            for i in tqdm.tqdm(xrange(n_samples)):
-                # rollout with policy
-                observations, actions, rewards = rollout(
-                    policy,
-                    env_spec,
-                    env_step,
-                    env_reset,
-                    env_render,
-                    n_obs_ticks,
-                )
-                episode_rewards.append(np.sum(rewards))
-                episode_lengths.append(len(observations))
+    for i in tqdm.tqdm(xrange(n_samples)):
+        # rollout with policy
+        observations, actions, rewards = rollout(
+            policy,
+            env_spec,
+            env_step,
+            env_reset,
+            env_render,
+            n_obs_ticks,
+        )
+        episode_rewards.append(np.sum(rewards))
+        episode_lengths.append(len(observations))
 
-            # summary
-            print '* summary'
-            print 'episode lengths:',
-            print 'mean', np.mean(episode_lengths),
-            print 'median', np.median(episode_lengths),
-            print 'max', np.max(episode_lengths),
-            print 'min', np.min(episode_lengths),
-            print 'std', np.std(episode_lengths)
+    # summary
+    print '* summary'
+    print 'episode lengths:',
+    print 'mean', np.mean(episode_lengths),
+    print 'median', np.median(episode_lengths),
+    print 'max', np.max(episode_lengths),
+    print 'min', np.min(episode_lengths),
+    print 'std', np.std(episode_lengths)
 
-            print 'episode rewards:',
-            print 'mean', np.mean(episode_rewards),
-            print 'median', np.median(episode_rewards),
-            print 'max', np.max(episode_rewards),
-            print 'min', np.min(episode_rewards),
-            print 'std', np.std(episode_rewards)
+    print 'episode rewards:',
+    print 'mean', np.mean(episode_rewards),
+    print 'median', np.median(episode_rewards),
+    print 'max', np.max(episode_rewards),
+    print 'min', np.min(episode_rewards),
+    print 'std', np.std(episode_rewards)
 
 if __name__ == '__main__':
     from util import passthrough, use_render_state
@@ -86,6 +95,7 @@ if __name__ == '__main__':
     parse.add_argument('--no_render', action='store_true')
     parse.add_argument('--n_samples', type=int, default=16)
     parse.add_argument('--env', default='CartPole-v0')
+    parse.add_argument('--model', choices=['q', 'pi'], default='pi')
     parse.add_argument('--policy', choices=['greedy', 'epsilon_greedy',
                                             'sample'], default='sample')
     parse.add_argument('--epsilon', type=float, default=1e-5)
@@ -129,6 +139,9 @@ if __name__ == '__main__':
     print 'reward threshold', gym_env.spec.reward_threshold
 
     # eval
-    evaluate(checkpoint_path, meta_path, env_spec, env_step, env_reset,
-             env_render, args.n_samples, args.policy, args.n_obs_ticks,
-             args.epsilon)
+    with tf.Graph().as_default() as g:
+        with tf.Session() as sess:
+            policy = load_policy(sess, checkpoint_path, meta_path, args.model,
+                                 args.policy, args.epsilon)
+            evaluate(env_spec, env_step, env_reset, env_render, args.n_samples,
+                     args.n_obs_ticks, policy)
