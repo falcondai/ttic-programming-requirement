@@ -205,7 +205,6 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                 nonterminals = []
                 next_obs = []
                 next_action_inds = []
-                # targets = []
 
                 # process rollouts
                 for observations, actions, rewards in episodes:

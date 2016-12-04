@@ -324,7 +324,7 @@ def build_argparser():
     parse.add_argument('--scale', type=float, default=1.)
     parse.add_argument('--interpolation', choices=['nearest', 'bilinear',
                                                    'bicubic', 'cubic'],
-                       default='nearest')
+                       default='bilinear')
 
     # objective options
     parse.add_argument('--reg_coeff', type=float, default=0.0001)
@@ -370,7 +370,7 @@ def build_argparser():
 
 if __name__ == '__main__':
     from functools import partial
-    from util import passthrough, use_render_state
+    from util import passthrough, use_render_state, scale_image
 
     # arguments
     parse = build_argparser()
@@ -382,6 +382,18 @@ if __name__ == '__main__':
             gym_env, args.scale, args.interpolation)
     else:
         env_spec, env_step, env_reset, env_render = passthrough(gym_env)
+        if len(env_spec['observation_shape']) == 3 \
+            and args.scale != 1.:
+            # the observation space is an image
+            # apply scaling
+            _env_reset = env_reset
+            _env_step = env_step
+            env_reset = lambda : scale_image(args.scale, args.interpolation, _env_reset())
+            def env_step(action):
+                im, reward, done = _env_step(action)
+                return scale_image(args.scale,
+                                   args.interpolation,
+                                   im), reward, done
 
     env_spec['timestep_limit'] = min(gym_env.spec.timestep_limit,
                                      args.timestep_limit)

@@ -321,7 +321,7 @@ def build_argparser():
 
 if __name__ == '__main__':
     from functools import partial
-    from util import passthrough, use_render_state
+    from util import passthrough, use_render_state, scale_image
 
     # arguments
     parse = build_argparser()
