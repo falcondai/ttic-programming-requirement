@@ -71,31 +71,29 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                 policy_input_shape,
                 env_spec['action_size'])
 
-        with tf.variable_scope(current_q_model_scope, reuse=True):
-            next_obs_ph, _, next_action_values = build_q_model(
-                policy_input_shape,
-                env_spec['action_size'])
-
-        # target_q_model_scope = 'target_q_model'
-        # with tf.variable_scope(target_q_model_scope):
+        # with tf.variable_scope(current_q_model_scope, reuse=True):
         #     next_obs_ph, _, next_action_values = build_q_model(
         #         policy_input_shape,
-        #         env_spec['action_size'],
-        #         trainable=False)
+        #         env_spec['action_size'])
 
-        # ops to update target Q model
-        # update_target_q_op = []
-        # for cv in tf.contrib.framework.get_variables(scope=current_q_model_scope):
-        #     tv_name = target_q_model_scope + cv.name[len(current_q_model_scope):]
-        #     # XXX bug of tf.contrib.framework? the handling of suffix
-        #     tv = tf.contrib.framework.get_unique_variable(tv_name[:-2])
-        #     update_target_q_op.append(tv.assign(cv))
+        target_q_model_scope = 'target_q_model'
+        with tf.variable_scope(target_q_model_scope):
+            next_obs_ph, _, next_action_values = build_q_model(
+                policy_input_shape,
+                env_spec['action_size'],
+                trainable=False)
+
+        # ops to update the target Q model
+        update_target_q_op = []
+        for cv in tf.contrib.framework.get_variables(scope=current_q_model_scope):
+            tv_name = target_q_model_scope + cv.name[len(current_q_model_scope):]
+            # XXX bug of tf.contrib.framework? the handling of suffix
+            tv = tf.contrib.framework.get_unique_variable(tv_name[:-2])
+            update_target_q_op.append(tv.assign(cv))
 
         action_ph = tf.placeholder('int32')
         reward_ph = tf.placeholder('float')
-        # next_action_ph = tf.placeholder('int32')
         nonterminal_ph = tf.placeholder('float')
-        # target_ph = tf.placeholder('float')
 
         avg_len_episode_ph = tf.placeholder('float')
         avg_episode_reward_ph = tf.placeholder('float')
@@ -104,14 +102,6 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
         avg_tick_reward_ph = tf.placeholder('float')
         avg_objective_ph = tf.placeholder('float')
         epsilon_ph = tf.placeholder('float')
-
-        # if args['objective'] == 'sarsa':
-        #     # SARSA
-        #     # r + gamma * Q(s', a'), where s', a' are the observed
-        #     # according to behavior policy
-        #     target = reward_ph + nonterminal_ph * args['reward_gamma'] \
-        #         * vector_slice(next_action_values, next_action_ph)
-        # else:
 
         # Q-learning
         # r + gamma * max_a' Q(s', a'), where s' is the observed
@@ -205,11 +195,12 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                     episodes = []
                     n_ticks = 0
                     episode_rewards = []
-                    epsilon = args['initial_epsilon'] / (1. + args['epsilon_decay_rate'] * global_step.eval())
+                    epsilon = args['initial_epsilon'] / \
+                        (1. + args['epsilon_decay_rate'] * global_step.eval())
 
-                    # update target Q model
-                    # if i % args['n_update_target_interval'] == 0:
-                    #     sess.run(update_target_q_op)
+                    # update the target Q model
+                    if i % args['n_update_target_interval'] == 0:
+                        sess.run(update_target_q_op)
 
                     # sample rollouts
                     for j in xrange(args['n_update_episodes']):
@@ -238,9 +229,10 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                     # process rollouts
                     for observations, actions, rewards in episodes:
                         len_episode = len(observations)
-                        dup_obs = list(duplicate_obs(pad_zeros(observations,
-                                                            args['n_obs_ticks']),
-                                                  args['n_obs_ticks']))
+                        dup_obs = list(
+                            duplicate_obs(pad_zeros(observations,
+                                                    args['n_obs_ticks']),
+                                          args['n_obs_ticks']))
                         obs += dup_obs
                         action_inds += actions
                         all_rewards += rewards
@@ -257,48 +249,50 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                 # _all_rewards = np.asarray(all_rewards)[sample_ind]
                 # _targets = np.asarray(targets)[sample_ind]
 
-                # estimate and accumulate gradients by batches
-                acc_obj_val = 0.
-                acc_grads = dict([(grad, np.zeros(grad.get_shape()))
-                                      for grad, var in grad_vars])
+                # improve estimated Q_hat
                 n_batch = int(np.ceil(n_ticks * 1. / args['n_batch_ticks']))
-                for j in xrange(n_batch):
-                    start = j * args['n_batch_ticks']
-                    end = min(start + args['n_batch_ticks'], n_ticks)
-                    grad_feed = {
-                        keep_prob_ph: 1. - args['dropout_rate'],
-                        obs_ph: obs[start:end],
-                        action_ph: action_inds[start:end],
-                        reward_ph: all_rewards[start:end],
-                        next_obs_ph: next_obs[start:end],
-                        nonterminal_ph: nonterminals[start:end],
+                for j in xrange(args['n_value_updates']):
+                    # estimate and accumulate gradients by batches
+                    acc_obj_val = 0.
+                    acc_grads = dict([(grad, np.zeros(grad.get_shape()))
+                                          for grad, var in grad_vars])
+                    for k in xrange(n_batch):
+                        start = k * args['n_batch_ticks']
+                        end = min(start + args['n_batch_ticks'], n_ticks)
+                        grad_feed = {
+                            keep_prob_ph: 1. - args['dropout_rate'],
+                            obs_ph: obs[start:end],
+                            action_ph: action_inds[start:end],
+                            reward_ph: all_rewards[start:end],
+                            next_obs_ph: next_obs[start:end],
+                            nonterminal_ph: nonterminals[start:end],
+                        }
+
+                        # sum up gradients
+                        obj_val, grad_vars_val = sess.run([
+                            objective,
+                            grad_vars,
+                            ], feed_dict=grad_feed)
+                        for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
+                            acc_grads[g] += g_val * (end - start) / n_ticks
+                        acc_obj_val += obj_val
+
+                    # update current Q model
+                    update_dict = {
+                        avg_len_episode_ph: avg_len_episode,
+                        avg_episode_reward_ph: np.mean(episode_rewards),
+                        max_episode_reward_ph: np.max(episode_rewards),
+                        min_episode_reward_ph: np.min(episode_rewards),
+                        avg_tick_reward_ph: avg_tick_reward,
+                        avg_objective_ph: acc_obj_val / n_ticks,
+                        epsilon_ph: epsilon,
                     }
+                    update_dict.update(acc_grads)
+                    summary_val, _ = sess.run([summary_op, update_q_op],
+                                              feed_dict=update_dict)
 
-                    # sum up gradients
-                    obj_val, grad_vars_val = sess.run([
-                        objective,
-                        grad_vars,
-                        ], feed_dict=grad_feed)
-                    for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
-                        acc_grads[g] += g_val * (end - start) / n_ticks
-                    acc_obj_val += obj_val
-
-                # update current Q model
-                update_dict = {
-                    avg_len_episode_ph: avg_len_episode,
-                    avg_episode_reward_ph: np.mean(episode_rewards),
-                    max_episode_reward_ph: np.max(episode_rewards),
-                    min_episode_reward_ph: np.min(episode_rewards),
-                    avg_tick_reward_ph: avg_tick_reward,
-                    avg_objective_ph: acc_obj_val / n_ticks,
-                    epsilon_ph: epsilon,
-                }
-                update_dict.update(acc_grads)
-                summary_val, _ = sess.run([summary_op, update_q_op],
-                                          feed_dict=update_dict)
-
-                if not args['no_summary']:
-                    writer.add_summary(summary_val, global_step.eval())
+                    if not args['no_summary']:
+                        writer.add_summary(summary_val, global_step.eval())
 
                 if i % args['n_save_interval'] == 0:
                     saver.save(sess, args['checkpoint_dir'] + '/model',
@@ -343,6 +337,7 @@ def build_argparser():
     parse.add_argument('--n_save_interval', type=int, default=1)
     parse.add_argument('--n_train_steps', type=int, default=10**5)
     parse.add_argument('--n_update_target_interval', type=int, default=4)
+    parse.add_argument('--n_value_updates', type=int, default=1)
 
     # optimizer options
     parse.add_argument('--momentum', type=float, default=0.2)
@@ -388,7 +383,8 @@ if __name__ == '__main__':
             # apply scaling
             _env_reset = env_reset
             _env_step = env_step
-            env_reset = lambda : scale_image(args.scale, args.interpolation, _env_reset())
+            env_reset = lambda : scale_image(args.scale, args.interpolation,
+                                             _env_reset())
             def env_step(action):
                 im, reward, done = _env_step(action)
                 return scale_image(args.scale,

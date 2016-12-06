@@ -220,49 +220,51 @@ def train_q(env_spec, env_step, env_reset, env_render, args, build_q_model):
                     next_obs += dup_obs[1:] + [np.zeros(policy_input_shape)]
                     next_action_inds += actions[1:] + [0]
 
-                # estimate and accumulate gradients by batches
-                acc_obj_val = 0.
-                acc_grads = dict([(grad, np.zeros(grad.get_shape()))
-                                      for grad, var in grad_vars])
+                # improve estimated Q (Q_hat)
                 n_batch = int(np.ceil(n_ticks * 1. / args['n_batch_ticks']))
-                for j in xrange(n_batch):
-                    start = j * args['n_batch_ticks']
-                    end = min(start + args['n_batch_ticks'], n_ticks)
-                    grad_feed = {
-                        keep_prob_ph: 1. - args['dropout_rate'],
-                        obs_ph: obs[start:end],
-                        action_ph: action_inds[start:end],
-                        reward_ph: all_rewards[start:end],
-                        next_obs_ph: next_obs[start:end],
-                        next_action_ph: next_action_inds[start:end],
-                        nonterminal_ph: nonterminals[start:end],
+                for j in xrange(args['n_value_updates']):
+                    # estimate and accumulate gradients by batches
+                    acc_obj_val = 0.
+                    acc_grads = dict([(grad, np.zeros(grad.get_shape()))
+                                          for grad, var in grad_vars])
+                    for k in xrange(n_batch):
+                        start = k * args['n_batch_ticks']
+                        end = min(start + args['n_batch_ticks'], n_ticks)
+                        grad_feed = {
+                            keep_prob_ph: 1. - args['dropout_rate'],
+                            obs_ph: obs[start:end],
+                            action_ph: action_inds[start:end],
+                            reward_ph: all_rewards[start:end],
+                            next_obs_ph: next_obs[start:end],
+                            next_action_ph: next_action_inds[start:end],
+                            nonterminal_ph: nonterminals[start:end],
+                        }
+
+                        # sum up gradients
+                        obj_val, grad_vars_val = sess.run([
+                            objective,
+                            grad_vars,
+                            ], feed_dict=grad_feed)
+                        for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
+                            acc_grads[g] += g_val * (end - start) / n_ticks
+                        acc_obj_val += obj_val
+
+                    # update current Q model
+                    update_dict = {
+                        avg_len_episode_ph: avg_len_episode,
+                        avg_episode_reward_ph: np.mean(episode_rewards),
+                        max_episode_reward_ph: np.max(episode_rewards),
+                        min_episode_reward_ph: np.min(episode_rewards),
+                        avg_tick_reward_ph: avg_tick_reward,
+                        avg_objective_ph: acc_obj_val / n_ticks,
+                        epsilon_ph: epsilon,
                     }
+                    update_dict.update(acc_grads)
+                    summary_val, _ = sess.run([summary_op, update_q_op],
+                                              feed_dict=update_dict)
 
-                    # sum up gradients
-                    obj_val, grad_vars_val = sess.run([
-                        objective,
-                        grad_vars,
-                        ], feed_dict=grad_feed)
-                    for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
-                        acc_grads[g] += g_val * (end - start) / n_ticks
-                    acc_obj_val += obj_val
-
-                # update current Q model
-                update_dict = {
-                    avg_len_episode_ph: avg_len_episode,
-                    avg_episode_reward_ph: np.mean(episode_rewards),
-                    max_episode_reward_ph: np.max(episode_rewards),
-                    min_episode_reward_ph: np.min(episode_rewards),
-                    avg_tick_reward_ph: avg_tick_reward,
-                    avg_objective_ph: acc_obj_val / n_ticks,
-                    epsilon_ph: epsilon,
-                }
-                update_dict.update(acc_grads)
-                summary_val, _ = sess.run([summary_op, update_q_op],
-                                          feed_dict=update_dict)
-
-                if not args['no_summary']:
-                    writer.add_summary(summary_val, global_step.eval())
+                    if not args['no_summary']:
+                        writer.add_summary(summary_val, global_step.eval())
 
                 if i % args['n_save_interval'] == 0:
                     saver.save(sess, args['checkpoint_dir'] + '/model',
@@ -288,7 +290,7 @@ def build_argparser():
     parse.add_argument('--scale', type=float, default=1.)
     parse.add_argument('--interpolation', choices=['nearest', 'bilinear',
                                                    'bicubic', 'cubic'],
-                       default='nearest')
+                       default='bilinear')
 
     # objective options
     parse.add_argument('--reg_coeff', type=float, default=0.0001)
@@ -307,6 +309,7 @@ def build_argparser():
     parse.add_argument('--n_save_interval', type=int, default=1)
     parse.add_argument('--n_train_steps', type=int, default=10**5)
     parse.add_argument('--n_update_target_interval', type=int, default=4)
+    parse.add_argument('--n_value_updates', type=int, default=1)
 
     # optimizer options
     parse.add_argument('--momentum', type=float, default=0.2)
