@@ -18,6 +18,10 @@ def load_policy(sess, checkpoint_path, meta_path, model_type, policy_type, epsil
         # policy
         obs_ph, keep_prob_ph = tf.get_collection('inputs')
         _, probs = tf.get_collection('outputs')
+    elif model_type == 'pi_v':
+        # policy and state-value
+        obs_ph, keep_prob_ph = tf.get_collection('inputs')[:2]
+        probs = tf.get_collection('outputs')[0]
     else:
         # use the current Q
         obs_ph, keep_prob_ph = tf.get_collection('inputs')[:2]
@@ -95,7 +99,7 @@ if __name__ == '__main__':
     parse.add_argument('--no_render', action='store_true')
     parse.add_argument('--n_samples', type=int, default=16)
     parse.add_argument('--env', default='CartPole-v0')
-    parse.add_argument('--model', choices=['q', 'pi'], default='pi')
+    parse.add_argument('--model', choices=['q', 'pi', 'pi_v'], default='pi')
     parse.add_argument('--policy', choices=['greedy', 'epsilon_greedy',
                                             'sample'], default='sample')
     parse.add_argument('--epsilon', type=float, default=1e-5)

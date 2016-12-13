@@ -3,6 +3,7 @@ from functools import partial
 from Queue import deque
 import numpy as np
 import tensorflow as tf
+import glob, os
 
 def vector_slice(A, B):
     """ Returns values of rows i of A at column B[i]
@@ -123,3 +124,26 @@ def test_restore_vars(sess, checkpoint_path, meta_path):
     print '* using metagraph from %s' % meta_path
     saver.restore(sess, checkpoint_path)
     return True
+
+def get_current_run_id(checkpoint_dir):
+    paths = glob.glob('%s/hyperparameters.*.json' % checkpoint_dir)
+    if len(paths) == 0:
+        return 0
+    return sorted(map(lambda p: int(p.split('.')[-2]), paths))[-1] + 1
+
+def restore_vars(saver, sess, checkpoint_dir, restart=False):
+    ''' Restore saved net, global score and step, and epsilons OR
+    create checkpoint directory for later storage. '''
+    sess.run([tf.initialize_all_variables(), tf.initialize_local_variables()])
+
+    if not restart:
+        path = tf.train.latest_checkpoint(checkpoint_dir)
+        if path is None:
+            print '* no existing checkpoint found'
+            return False
+        else:
+            print '* restoring from %s' % path
+            saver.restore(sess, path)
+            return True
+    print '* overwriting checkpoints at %s' % checkpoint_dir
+    return False
