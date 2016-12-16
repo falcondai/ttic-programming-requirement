@@ -97,15 +97,20 @@ def train(train_env, eval_env, args, build_model):
         # objective for value estimation
         target = reward_ph + nonterminal_ph * args['reward_gamma'] \
             * next_state_value
-        value_objective = 0.01 * tf.reduce_sum(tf.square(tf.stop_gradient(target) \
+        value_objective = tf.reduce_sum(tf.square(tf.stop_gradient(target) \
                                                   - state_value))
 
         # objective for computing policy gradient
         state_advantage = target - state_value
         policy_objective = tf.reduce_sum(action_logits * \
                                          tf.stop_gradient(state_advantage)) \
-            + args['reg_coeff'] * action_entropy
 
+
+        # total objective
+        # maximize policy objective and minimize value objective
+        # and maximize action entropy
+        objective = - policy_objective + args['value_objective_coeff'] \
+            * value_objective - args['action_entropy_coeff'] * action_entropy
 
         # optimization
         global_step = tf.Variable(0, trainable=False, name='global_step')
@@ -134,17 +139,9 @@ def train(train_env, eval_env, args, build_model):
                                                    args['momentum'])
 
         # train ops
-        # maximize the PG objective
-        pg_grad_vars = optimizer.compute_gradients(-policy_objective)
-        pg_grad_vars = [(g, v) for g, v in pg_grad_vars if g != None]
-        update_policy_op = optimizer.apply_gradients(pg_grad_vars,
-                                                     global_step=global_step)
-
-        # minimize the value objective
-        # no increment to `global_step`
-        v_grad_vars = optimizer.compute_gradients(value_objective)
-        v_grad_vars = [(g, v) for g, v in v_grad_vars if g != None]
-        update_v_op = optimizer.apply_gradients(v_grad_vars)
+        grad_vars = optimizer.compute_gradients(objective)
+        update_op = optimizer.apply_gradients(grad_vars,
+                                              global_step=global_step)
 
         # summaries
         eval_summary_op = tf.merge_summary([
@@ -156,12 +153,9 @@ def train(train_env, eval_env, args, build_model):
 
         train_summaries = []
         print '* extra summary'
-        for g, v in pg_grad_vars:
-            train_summaries.append(tf.histogram_summary('pg_gradients/%s' % v.name, g))
-            print 'pg_gradients/%s' % v.name
-        for g, v in v_grad_vars:
-            train_summaries.append(tf.histogram_summary('v_gradients/%s' % v.name, g))
-            print 'v_gradients/%s' % v.name
+        for g, v in grad_vars:
+            train_summaries.append(tf.summary.histogram('gradients/%s' % v.name, g))
+            print 'gradients/%s' % v.name
 
         train_summary_op = tf.merge_summary(train_summaries + [
             tf.scalar_summary('learning_rate', learning_rate),
@@ -172,14 +166,14 @@ def train(train_env, eval_env, args, build_model):
 
         saver = tf.train.Saver(max_to_keep=2, keep_checkpoint_every_n_hours=1)
         with tf.Session() as sess:
-            writer = tf.train.SummaryWriter(summary_dir, sess.graph,
-                                            flush_secs=30)
+            writer = tf.summary.FileWriter(summary_dir, sess.graph,
+                                           flush_secs=30)
             print '* writing summary to', summary_dir
             restore_vars(saver, sess, args['checkpoint_dir'], args['restart'])
 
-            print '* regularized parameters:'
-            for v in tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES):
-                print v.name
+            # print '* regularized parameters:'
+            # for v in tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES):
+            #     print v.name
 
             # stochastic policy
             policy = lambda obs: action_probs.eval(feed_dict={
@@ -215,10 +209,8 @@ def train(train_env, eval_env, args, build_model):
 
                 # estimate policy gradient by batches
                 # accumulate gradients over batches
-                pg_acc_grads = dict([(grad, np.zeros(grad.get_shape()))
-                                     for grad, var in pg_grad_vars])
-                v_acc_grads = dict([(grad, np.zeros(grad.get_shape()))
-                                    for grad, var in v_grad_vars])
+                acc_grads = dict([(grad, np.zeros(grad.get_shape()))
+                                    for grad, var in grad_vars])
                 acc_reg = 0.
                 acc_v_obj_val = 0.
                 n_batch = int(np.ceil(args['n_update_ticks'] * 1. / args['n_batch_ticks']))
@@ -235,17 +227,15 @@ def train(train_env, eval_env, args, build_model):
                     }
 
                     # compute the expectation of gradients
-                    v_obj_val, pg_grad_vars_val, v_grad_vars_val, \
+                    v_obj_val, grad_vars_val, \
                     action_entropy_val = sess.run([
                         value_objective,
-                        pg_grad_vars,
-                        v_grad_vars,
+                        grad_vars,
                         action_entropy,
                         ], feed_dict=grad_feed)
-                    for (g, _), (g_val, _) in zip(pg_grad_vars, pg_grad_vars_val):
-                        pg_acc_grads[g] += g_val / args['n_update_ticks']
-                    for (g, _), (g_val, _) in zip(v_grad_vars, v_grad_vars_val):
-                        v_acc_grads[g] += g_val / args['n_update_ticks']
+
+                    for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
+                        acc_grads[g] += g_val / args['n_update_ticks']
 
                     acc_reg += action_entropy_val * (end - start)
                     acc_v_obj_val += v_obj_val
@@ -280,12 +270,11 @@ def train(train_env, eval_env, args, build_model):
                     avg_v_objective_ph: acc_v_obj_val / args['n_update_ticks'],
                     avg_action_entropy_ph: acc_reg / args['n_update_ticks'],
                 }
-                update_dict.update(pg_acc_grads)
-                update_dict.update(v_acc_grads)
-                train_summary_val, _, _ = sess.run([train_summary_op,
-                                                    update_policy_op,
-                                                    update_v_op],
-                                                   feed_dict=update_dict)
+                update_dict.update(acc_grads)
+
+                train_summary_val, _ = sess.run([train_summary_op,
+                                                 update_op],
+                                                feed_dict=update_dict)
 
                 writer.add_summary(train_summary_val, global_step.eval())
 
@@ -315,7 +304,8 @@ def build_argparser():
                                                    'bicubic', 'cubic'],
                        default='bilinear')
 
-    parse.add_argument('--reg_coeff', type=float, default=0.)
+    parse.add_argument('--action_entropy_coeff', type=float, default=0.01)
+    parse.add_argument('--value_objective_coeff', type=float, default=0.1)
     parse.add_argument('--reward_gamma', type=float, default=1.)
     parse.add_argument('--dropout_rate', type=float, default=0.2)
 
@@ -343,7 +333,7 @@ def build_argparser():
     # training options
     parse.add_argument('--optimizer', choices=['adam', 'momentum', 'ag',
                                                'rmsprop'], default='rmsprop')
-    parse.add_argument('--initial_learning_rate', type=float, default=0.001)
+    parse.add_argument('--initial_learning_rate', type=float, default=0.01)
     parse.add_argument('--n_decay_steps', type=int, default=512)
     parse.add_argument('--no_decay_staircase', action='store_true')
     parse.add_argument('--decay_rate', type=float, default=0.8)
