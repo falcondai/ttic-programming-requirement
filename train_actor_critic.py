@@ -246,7 +246,7 @@ def train(train_env, eval_env, args, build_model):
                         pg_acc_grads[g] += g_val / args['n_update_ticks']
                     for (g, _), (g_val, _) in zip(v_grad_vars, v_grad_vars_val):
                         v_acc_grads[g] += g_val / args['n_update_ticks']
-                    # TODO change regularizer
+
                     acc_reg += action_entropy_val * (end - start)
                     acc_v_obj_val += v_obj_val
                 last_obs_q = _last_obs_q
@@ -291,7 +291,7 @@ def train(train_env, eval_env, args, build_model):
 
                 if i % args['n_save_interval'] == 0:
                     saver.save(sess, args['checkpoint_dir'] + '/model',
-                               global_step=global_step.eval())
+                               global_step=global_step.eval(), write_meta_graph=False)
 
             # save again at the end
             saver.save(sess, args['checkpoint_dir'] + '/model',
@@ -327,7 +327,7 @@ def build_argparser():
     # how many episodes to rollout before update parameters
     parse.add_argument('--n_update_ticks', type=int, default=256)
     parse.add_argument('--n_batch_ticks', type=int, default=128)
-    parse.add_argument('--n_save_interval', type=int, default=1)
+    parse.add_argument('--n_save_interval', type=int, default=8)
     parse.add_argument('--n_train_steps', type=int, default=10**5)
     parse.add_argument('--n_eval_episodes', type=int, default=4)
     parse.add_argument('--n_eval_interval', type=int, default=8)

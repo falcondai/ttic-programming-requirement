@@ -134,7 +134,7 @@ def get_current_run_id(checkpoint_dir):
 def restore_vars(saver, sess, checkpoint_dir, restart=False):
     ''' Restore saved net, global score and step, and epsilons OR
     create checkpoint directory for later storage. '''
-    sess.run([tf.initialize_all_variables(), tf.initialize_local_variables()])
+    sess.run([tf.global_variables_initializer(), tf.local_variables_initializer()])
 
     if not restart:
         path = tf.train.latest_checkpoint(checkpoint_dir)
