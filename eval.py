@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 import numpy as np
-import os, sys, cPickle, time, glob, itertools, csv
+import os, sys, cPickle, time, glob, itertools, csv, glob
 from functools import partial
 import tqdm
 import argparse
@@ -120,7 +120,8 @@ if __name__ == '__main__':
         checkpoint_path = args.checkpoint_path
 
     if args.meta_path == None:
-        meta_path = checkpoint_path + '.meta'
+        # find a meta graph file in the same directory
+        meta_path = glob.glob(os.path.dirname(checkpoint_path) + '/*.meta')[0]
     else:
         meta_path = args.meta_path
 
