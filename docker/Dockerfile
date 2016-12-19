@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:0.11.0rc0-gpu
+FROM tensorflow/tensorflow:0.12.0-rc1-gpu
 
 MAINTAINER Falcon Dai <me@falcondai.com>
 

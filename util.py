@@ -45,7 +45,41 @@ def passthrough(gym_env):
 def scale_image(scale, interpolation, im):
     return imresize(im, scale, interp=interpolation)
 
-def use_render_state(gym_env, scale, interpolation='nearest'):
+def grayscale_image(im):
+    return im.mean(axis=2, keepdims=True)
+
+def scale_env(env, scale, interpolation):
+    spec, step, reset, render = env
+    spec['observation_shape'] = scale_image(scale, interpolation,
+                                            np.zeros(
+                                                spec['observation_shape']
+                                                )
+                                            ).shape
+    env_reset = lambda : scale_image(scale, interpolation, reset())
+    def env_step(action):
+        im, reward, done = step(action)
+        return grayscale_image(scale_image(scale, interpolation, im)), reward, done
+    return spec, env_step, env_reset, render
+
+def atari_env(env, scale, skip_frames):
+    spec, step, reset, render = env
+    spec['observation_shape'] = grayscale_image(scale_image(scale,
+                                                            'bilinear',
+                                                            np.zeros(
+                                                                spec['observation_shape']
+                                                                ))).shape
+    env_reset = lambda : grayscale_image(scale_image(scale, 'bilinear', reset()))
+    def env_step(action):
+        acc_reward = 0.
+        for i in xrange(skip_frames):
+            im, reward, done = step(action)
+            acc_reward += reward
+            if done:
+                break
+        return grayscale_image(scale_image(scale, 'bilinear', im)), acc_reward, done
+    return spec, env_step, env_reset, render
+
+def use_render_state(gym_env, scale, interpolation='bilinear'):
     '''use gym environment's rendered image as observation variable'''
     si = partial(scale_image, scale, interpolation)
     observation_shape = si(gym_env.render('rgb_array')).shape

@@ -1,5 +1,5 @@
 checkpoints/
-tf-log/
+tf-log*/
 data
 *.pyc
 .DS_Store

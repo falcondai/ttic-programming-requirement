@@ -1,3 +1,3 @@
 #!/bin/bash
 
-wrsync $@ --exclude=tf-log/ --exclude=checkpoints/ --exclude=guided/
+wrsync $@ --exclude=tf-log*/ --exclude=checkpoints/ --exclude=guided/

@@ -9,91 +9,20 @@ import argparse
 import importlib
 import gym
 from util import pad_zeros, duplicate_obs, vector_slice, \
-    get_current_run_id, restore_vars, rollout
+    get_current_run_id, restore_vars
 
-def partial_rollout(behavior_policy, env_spec, env_step, env_reset, last_obs_q,
-            last_done=True, env_render=None, n_update_ticks=256, n_obs_ticks=1):
-    '''rollout based on behavior policy from an environment'''
 
-    observations, actions, rewards, nonterminals = [], [], [], []
-    t = 0
-    done = last_done
-    # continue with the previous obs queue
-    obs_q = last_obs_q
-    obs = last_obs_q[-1]
-    while t < n_update_ticks:
-        if done or t >= env_spec['timestep_limit']:
-            obs = env_reset()
-            # pad the first observation with zeros
-            obs_q = deque(pad_zeros([obs], n_obs_ticks), n_obs_ticks)
-        policy_input = np.concatenate(obs_q, axis=-1)
-        action_probs = behavior_policy(policy_input)
-        action = np.random.choice(env_spec['action_size'], p=action_probs)
-        obs_q.popleft()
-        observations.append(obs)
-        actions.append(action)
-        obs, reward, done = env_step(action)
-        nonterminals.append(not done)
-        rewards.append([reward])
-        obs_q.append(obs)
-        if env_render != None:
-            env_render()
-        t += 1
-    return observations, actions, rewards, nonterminals, done, obs_q
-
-def process_partial_rollout(observations, rewards, nonterminals, last_obs_q,
-                            n_obs_ticks, reward_gamma, state_value_func):
-    observations = list(last_obs_q)[:-1] + observations
-    if nonterminals[-1]:
-        last_state_value = state_value_func(np.concatenate(
-            observations[-n_obs_ticks:], axis=-1))
-    else:
-        last_state_value = 0.
-    acc_rewards = []
+def process_rollout(rewards, reward_gamma, next_state_value=0.):
+    acc_reward = next_state_value
+    partial_rewards_to_go = []
+    # for i in xrange(delta_tick-1, current_episode_start-1, -1):
     for reward in rewards[::-1]:
-        last_state_value = reward[0] + reward_gamma * last_state_value
-        acc_rewards.insert(0, last_state_value)
+        acc_reward = reward + reward_gamma * acc_reward
+        partial_rewards_to_go.insert(0, acc_reward)
+    return partial_rewards_to_go
 
-    obs = list(duplicate_obs(observations, n_obs_ticks))
-    return obs, acc_rewards
-
-def process_ticks(observations, actions, rewards, nonterminals, last_obs_q,
-                  n_obs_ticks, reward_gamma, state_value_func):
-    split_observations = []
-    split_rewards = []
-    split_nonterminals = []
-    obs_q = list(last_obs_q)
-    merged_obs = []
-    merged_acc_rewards = []
-    for observation, reward, nonterminal in zip(observations, rewards,
-                                                nonterminals):
-        split_observations.append(observation)
-        split_rewards.append(reward)
-        split_nonterminals.append(nonterminal)
-        if not nonterminal:
-            obs, acc_rewards = process_partial_rollout(split_observations, split_rewards,
-                                                       split_nonterminals, obs_q, n_obs_ticks,
-                                                       reward_gamma, state_value_func)
-            merged_obs += obs
-            merged_acc_rewards += acc_rewards
-            obs_q = pad_zeros(split_observations[-1:], n_obs_ticks)
-            split_observations = []
-            split_rewards = []
-            split_nonterminals = []
-
-    if len(split_rewards) > 0:
-        obs_q = (list(last_obs_q)[:-1] + observations)[:n_obs_ticks]
-        obs, acc_rewards = process_partial_rollout(split_observations, split_rewards,
-                                                   split_nonterminals, obs_q, n_obs_ticks,
-                                                   reward_gamma, state_value_func)
-        merged_obs += obs
-        merged_acc_rewards += acc_rewards
-    return merged_obs, actions, merged_acc_rewards
-
-
-def train(train_env, eval_env, args, build_model):
+def train(train_env, args, build_model):
     env_spec, env_step, env_reset, env_render = train_env
-    eval_env_spec, eval_env_step, eval_env_reset, eval_env_render = eval_env
 
     summary_dir = 'tf-log/%s%d-%s' % (args['summary_prefix'], time.time(),
                                       os.path.basename(args['checkpoint_dir']))
@@ -123,24 +52,10 @@ def train(train_env, eval_env, args, build_model):
             obs_ph, keep_prob_ph, action_probs, state_value = build_model(
                 policy_input_shape,
                 env_spec['action_size'])
-        # with tf.variable_scope('model', reuse=True):
-        #     next_obs_ph, _, _, next_state_value = build_model(
-        #         policy_input_shape,
-        #         env_spec['action_size'])
+
         actions_taken_ph = tf.placeholder('int32')
-        reward_ph = tf.placeholder('float')
-        nonterminal_ph = tf.placeholder('float')
         target_value_ph = tf.placeholder('float')
 
-        avg_v_objective_ph = tf.placeholder('float')
-        avg_len_episode_ph = tf.placeholder('float')
-        avg_episode_reward_ph = tf.placeholder('float')
-        max_episode_reward_ph = tf.placeholder('float')
-        min_episode_reward_ph = tf.placeholder('float')
-        avg_tick_reward_ph = tf.placeholder('float')
-        avg_action_entropy_ph = tf.placeholder('float')
-
-        # expected reward under policy
         # entropy regularizer to encourage action diversity
         log_action_probs = tf.log(action_probs)
         action_entropy = - tf.reduce_mean(tf.reduce_sum(action_probs \
@@ -148,18 +63,13 @@ def train(train_env, eval_env, args, build_model):
         action_logits = vector_slice(log_action_probs, actions_taken_ph)
 
         # objective for value estimation
-        value_objective = tf.reduce_sum(tf.square(target_value_ph \
-                                                  - state_value))
-        # target = reward_ph + nonterminal_ph * args['reward_gamma'] \
-        #     * next_state_value
-        # value_objective = tf.reduce_sum(tf.square(tf.stop_gradient(target) \
-        #                                           - state_value))
+        value_objective = tf.reduce_mean(tf.square(target_value_ph \
+                                                   - state_value))
 
         # objective for computing policy gradient
         state_advantage = target_value_ph - state_value
-        # state_advantage = target - state_value
-        policy_objective = tf.reduce_sum(action_logits * \
-                                         tf.stop_gradient(state_advantage))
+        policy_objective = tf.reduce_mean(action_logits * \
+                                          tf.stop_gradient(state_advantage))
 
         # total objective
         # maximize policy objective and minimize value objective
@@ -172,7 +82,7 @@ def train(train_env, eval_env, args, build_model):
         # global tick keeps track of ticks experienced by the agent
         global_tick = tf.Variable(0, trainable=False, name='global_tick')
         delta_tick = tf.placeholder('int32')
-        increment_global_tick = global_tick.assign_add(delta_tick)
+        increment_global_tick = global_tick.assign_add(1)
 
         learning_rate = tf.train.exponential_decay(
             args['initial_learning_rate'],
@@ -204,40 +114,42 @@ def train(train_env, eval_env, args, build_model):
                                               global_step=global_step)
 
         # summaries
-        # per_episode_summary = tf.summary.merge([
-        #     tf.summary.scalar('episodic/reward', ),
-        #     tf.summary.scalar('episodic/length', ),
-        # ])
-        #
-        # per_step_summary = tf.summary.merge([
-        #
-        # ])
+        episode_len_ph = tf.placeholder('float')
+        episode_reward_ph = tf.placeholder('float')
+        ticks_per_second_ph = tf.placeholder('float')
+        steps_per_second_ph = tf.placeholder('float')
+        images_ph = tf.placeholder('uint8')
 
-        # per_tick_summary = tf.summary.merge([
-        #     tf.summary.scalar('tick/ticks_per_second'),
-        # ])
+        per_episode_summary = tf.summary.merge([
+            tf.summary.scalar('episodic/reward', episode_reward_ph),
+            tf.summary.scalar('episodic/length', episode_len_ph),
+            tf.summary.scalar('episodic/reward_per_tick',
+                              episode_reward_ph / episode_len_ph),
+            tf.summary.scalar('episodic/ticks_per_second',
+                              ticks_per_second_ph)
+        ])
 
-        eval_summary_op = tf.summary.merge([
-            tf.summary.scalar('average_episode_reward', avg_episode_reward_ph),
-            tf.summary.scalar('max_episode_reward', max_episode_reward_ph),
-            tf.summary.scalar('min_episode_reward', min_episode_reward_ph),
-            tf.summary.scalar('average_episode_length', avg_len_episode_ph),
-            ])
-
-        train_summaries = []
+        grad_summaries = []
+        grads = []
         print '* extra summary'
         for g, v in grad_vars:
-            train_summaries.append(tf.summary.histogram('gradients/%s' % v.name, g))
+            grad_summaries.append(tf.summary.histogram('gradients/%s' % v.name, g))
             print 'gradients/%s' % v.name
+            grads.append(g)
 
-        train_summary_op = tf.summary.merge(train_summaries + [
-            tf.summary.scalar('learning_rate', learning_rate),
-            tf.summary.scalar('average_action_entropy', avg_action_entropy_ph),
-            tf.summary.scalar('average_tick_reward', avg_tick_reward_ph),
-            tf.summary.scalar('average_v_objective', avg_v_objective_ph),
-            ])
+        per_step_summary = tf.summary.merge(grad_summaries + [
+            tf.summary.scalar('model/learning_rate', learning_rate),
+            tf.summary.scalar('model/state_value_objective',
+                              value_objective),
+            tf.summary.scalar('model/policy_objective', policy_objective),
+            tf.summary.scalar('model/action_entropy', action_entropy),
+            tf.summary.scalar('model/gradient_norm', tf.global_norm(grads)),
+            tf.summary.scalar('model/steps_per_second', steps_per_second_ph),
+            tf.image_summary('frames', images_ph, max_images=3),
+        ])
 
-        saver = tf.train.Saver(max_to_keep=2, keep_checkpoint_every_n_hours=1)
+        saver = tf.train.Saver(max_to_keep=2, \
+                               keep_checkpoint_every_n_hours=1)
         with tf.Session() as sess:
             writer = tf.summary.FileWriter(summary_dir, sess.graph,
                                            flush_secs=30)
@@ -261,114 +173,109 @@ def train(train_env, eval_env, args, build_model):
                 keep_prob_ph: 1. - args['dropout_rate'],
             })[0,0]
 
-            last_done = True
-            last_obs_q = deque(pad_zeros([np.zeros(env_spec['observation_shape'])],
-                                   args['n_obs_ticks']), args['n_obs_ticks'])
-            for i in tqdm.tqdm(xrange(args['n_train_steps'])):
-                # on-policy rollout for some ticks
-                observations, actions, rewards, nonterminals, \
-                last_done, _last_obs_q = partial_rollout(
-                    policy_func,
-                    env_spec,
-                    env_step,
-                    env_reset,
-                    deque(last_obs_q),
-                    last_done,
-                    env_render,
-                    n_update_ticks=args['n_update_ticks'] + 1,
-                    n_obs_ticks=args['n_obs_ticks'],
-                )
-                avg_tick_reward = np.mean(rewards)
+            n_ticks = args['n_update_ticks']
+            n_obs_ticks = args['n_obs_ticks']
+            obs = []
+            actions = []
+            rewards = []
+            rewards_to_go = []
+            terminals = []
+            done = True
+            episode_start = None
+            tick = global_tick.eval()
+            delta_tick, step = 0, 0
+            step_start = time.time()
+            current_episode_start = 0
+            progress_bar = tqdm.trange(args['n_train_steps']).__iter__()
+            while True:
+                # on-policy rollout
+                if done:
+                    # calculate rewards-to-go till the end of last episode
+                    rewards_to_go += process_rollout(rewards[current_episode_start:], args['reward_gamma'])
 
-                obs, actions, acc_rewards = process_ticks(observations, actions,
-                                                          rewards, nonterminals,
-                                                          last_obs_q,
-                                                          args['n_obs_ticks'],
-                                                          args['reward_gamma'],
-                                                          state_value_func)
+                    # reset the observations queue
+                    observations = [np.zeros(env_spec['observation_shape'])]\
+                        * (n_obs_ticks - 1)
+                    observations.append(env_reset())
+                    current_episode_start = delta_tick
 
-                # # transform and preprocess the rollouts
-                # obs = list(duplicate_obs(list(last_obs_q)[:-1] + observations,
-                #                          args['n_obs_ticks']))
-                # next_obs = obs[1:]
-                # # ignore the last tick
-                # # TODO add the last tick to the next
-                # obs = obs[:-1]
+                    # episode time stats
+                    if episode_start != None:
+                        episode_dt = time.time() - episode_start
+                        # per-episode summary
+                        per_episode_summary_val = per_episode_summary.eval({
+                            episode_reward_ph: episode_reward,
+                            episode_len_ph: episode_len,
+                            ticks_per_second_ph: episode_len / episode_dt,
+                        })
+                        writer.add_summary(per_episode_summary_val, tick)
+                    # reset episode stats
+                    episode_start = time.time()
+                    episode_len = 0
+                    episode_reward = 0.
 
-                # estimate policy gradient by batches
-                # accumulate gradients over batches
-                acc_grads = dict([(grad, np.zeros(grad.get_shape()))
-                                    for grad, var in grad_vars])
-                acc_reg = 0.
-                acc_v_obj_val = 0.
-                n_batch = int(np.ceil(args['n_update_ticks'] * 1. / args['n_batch_ticks']))
-                for j in xrange(n_batch):
-                    start = j * args['n_batch_ticks']
-                    end = min(start + args['n_batch_ticks'], args['n_update_ticks'])
-                    grad_feed = {
-                        obs_ph: obs[start:end],
-                        keep_prob_ph: 1. - args['dropout_rate'],
-                        actions_taken_ph: actions[start:end],
-                        target_value_ph: acc_rewards[start:end],
-                        # reward_ph: rewards[start:end],
-                        # nonterminal_ph: nonterminals[start:end],
-                        # next_obs_ph: next_obs[start:end],
-                    }
+                model_input = np.concatenate(observations[-n_obs_ticks:], \
+                                             axis=-1)
+                obs.append(model_input)
+                action = np.random.choice(env_spec['action_size'], \
+                                          p=policy_func(model_input))
+                actions.append(action)
 
-                    # compute the expectation of gradients
-                    v_obj_val, grad_vars_val, action_entropy_val = sess.run([
-                        value_objective,
-                        grad_vars,
-                        action_entropy,
-                        ], feed_dict=grad_feed)
+                next_obs, reward, done = env_step(action)
+                if env_render != None:
+                    env_render()
+                observations.append(next_obs)
+                rewards.append(reward)
+                if episode_len >= env_spec['timestep_limit'] - 1:
+                    # enforce time limit
+                    done = True
+                terminals.append(done)
 
-                    for (g, _), (g_val, _) in zip(grad_vars, grad_vars_val):
-                        acc_grads[g] += g_val / args['n_update_ticks']
+                episode_reward += reward
+                episode_len += 1
+                delta_tick += 1
+                tick = increment_global_tick.eval()
 
-                    acc_reg += action_entropy_val * (end - start)
-                    acc_v_obj_val += v_obj_val
-                last_obs_q = _last_obs_q
+                if delta_tick == args['n_update_ticks']:
+                    # got enough ticks for an update
+                    if terminals[-1]:
+                        rewards_to_go += process_rollout(rewards[current_episode_start:], args['reward_gamma'])
+                    else:
+                        # use the next state's value to
+                        # estimate rewards-to-go
+                        next_model_input = np.concatenate(observations[-n_obs_ticks:], \
+                                                     axis=-1)
+                        next_state_value = state_value_func(next_model_input)
+                        rewards_to_go += process_rollout(rewards[current_episode_start:], args['reward_gamma'], next_state_value)
 
-                # evaluation
-                if i % args['n_eval_interval'] == 0:
-                    episode_rewards = []
-                    episode_lens = []
-                    for j in xrange(args['n_eval_episodes']):
-                        _, _, er = rollout(
-                            policy_func,
-                            eval_env_spec,
-                            eval_env_step,
-                            eval_env_reset,
-                            None,
-                            args['n_obs_ticks'],
-                        )
-                        episode_rewards.append(np.sum(er))
-                        episode_lens.append(len(er))
-                    eval_summary_val = eval_summary_op.eval({
-                        avg_episode_reward_ph: np.mean(episode_rewards),
-                        max_episode_reward_ph: np.max(episode_rewards),
-                        min_episode_reward_ph: np.min(episode_rewards),
-                        avg_len_episode_ph: np.mean(episode_lens),
-                    })
-                    writer.add_summary(eval_summary_val, global_step.eval())
+                    step_dt = time.time() - step_start
+                    step_start = time.time()
+                    per_step_summary_val, _ = sess.run([per_step_summary, update_op], feed_dict={
+                        obs_ph: obs,
+                        target_value_ph: rewards_to_go,
+                        actions_taken_ph: actions,
+                        steps_per_second_ph: 1 / step_dt,
+                        images_ph: observations[-n_obs_ticks:],
+                        })
+                    # write per-step summary
+                    writer.add_summary(per_step_summary_val, tick)
 
-                # update policy with the sample expectation of gradients
-                update_dict = {
-                    avg_tick_reward_ph: avg_tick_reward,
-                    avg_v_objective_ph: acc_v_obj_val / args['n_update_ticks'],
-                    avg_action_entropy_ph: acc_reg / args['n_update_ticks'],
-                }
-                update_dict.update(acc_grads)
+                    observations = observations[-n_obs_ticks:]
+                    obs = []
+                    actions = []
+                    rewards = []
+                    terminals = []
+                    rewards_to_go = []
+                    step += 1
+                    delta_tick = 0
+                    current_episode_start = 0
+                    progress_bar.next()
+                    if step % args['n_save_interval'] == 0:
+                        saver.save(sess, args['checkpoint_dir'] + '/model',
+                                   global_step=global_step.eval(), write_meta_graph=False)
 
-                train_summary_val, _ = sess.run([train_summary_op,
-                                                 update_op],
-                                                feed_dict=update_dict)
-
-                writer.add_summary(train_summary_val, global_step.eval())
-
-                if i % args['n_save_interval'] == 0:
-                    saver.save(sess, args['checkpoint_dir'] + '/model',
-                               global_step=global_step.eval(), write_meta_graph=False)
+                    if step >= args['n_train_steps']:
+                        break
 
             # save again at the end
             saver.save(sess, args['checkpoint_dir'] + '/model',
@@ -434,35 +341,32 @@ def build_argparser():
 
 if __name__ == '__main__':
     from functools import partial
-    from util import passthrough, use_render_state, scale_image
+    from util import passthrough, use_render_state, scale_env, atari_env
 
     # arguments
     parse = build_argparser()
     args = parse.parse_args()
 
     gym_env = gym.make(args.env)
-    eval_env = gym.make(args.env)
 
     if args.use_render_state:
         env_spec, env_step, env_reset, env_render = use_render_state(
             gym_env, args.scale, args.interpolation)
-        eval_env_spec, eval_env_step, eval_env_reset, eval_env_render = \
-        use_render_state(eval_env, args.scale, args.interpolation)
     else:
         env_spec, env_step, env_reset, env_render = passthrough(gym_env)
-        eval_env_spec, eval_env_step, eval_env_reset, eval_env_render = \
-        passthrough(eval_env)
+        if len(env_spec['observation_shape']) == 3 and args.scale != 1.:
+            # the observation space is an image
+            # env_spec, env_step, env_reset, env_render = scale_env((env_spec, env_step, env_reset, env_render), args.scale, args.interpolation)
+            env_spec, env_step, env_reset, env_render = atari_env((env_spec, env_step, env_reset, env_render), args.scale, 4)
+
 
     env_spec['timestep_limit'] = min(gym_env.spec.timestep_limit,
                                      args.timestep_limit)
-    eval_env_spec['timestep_limit'] = min(eval_env.spec.timestep_limit,
-                                     args.timestep_limit)
     env_render = env_render if args.render else None
-    eval_env_render = eval_env_render if args.render else None
 
     print '* environment', args.env
     print 'observation shape', env_spec['observation_shape']
-    print 'action space', gym_env.action_space
+    print 'action space', env_spec['action_size']
     print 'timestep limit', env_spec['timestep_limit']
     print 'reward threshold', gym_env.spec.reward_threshold
 
@@ -475,7 +379,6 @@ if __name__ == '__main__':
         env.monitor.start(args['monitor_dir'])
 
     train((env_spec, env_step, env_reset, env_render),
-          (eval_env_spec, eval_env_step, eval_env_reset, eval_env_render),
           vars(args),
           model.build_model)
 
