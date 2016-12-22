@@ -9,7 +9,7 @@ import argparse
 import gym
 from gym import envs
 from util import rollout, vector_slice, to_greedy, to_epsilon_greedy, \
-                 test_restore_vars
+                 test_restore_vars, atari_env
 
 def load_policy(sess, checkpoint_path, meta_path, model_type, policy_type, epsilon):
     test_restore_vars(sess, checkpoint_path, meta_path)
@@ -132,6 +132,7 @@ if __name__ == '__main__':
             gym_env, args.scale, args.interpolation)
     else:
         env_spec, env_step, env_reset, env_render = passthrough(gym_env)
+        env_spec, env_step, env_reset, env_render = atari_env((env_spec, env_step, env_reset, env_render), args.scale, 1)
 
     env_spec['timestep_limit'] = min(gym_env.spec.timestep_limit,
                                      args.timestep_limit)

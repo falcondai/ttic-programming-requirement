@@ -66,13 +66,20 @@ def atari_env(env, scale, skip_frames):
     spec['observation_shape'] = grayscale_image(scale_image(scale,
                                                             'bilinear',
                                                             np.zeros(
-                                                                spec['observation_shape']
+                                                                (160, 160, 3)
                                                                 ))).shape
-    env_reset = lambda : grayscale_image(scale_image(scale, 'bilinear', reset()))
+
+    # spec['observation_shape'] = grayscale_image(scale_image(scale,
+    #                                                         'bilinear',
+    #                                                         np.zeros(
+    #                                                             spec['observation_shape']
+    #                                                             ))).shape
+    env_reset = lambda : grayscale_image(scale_image(scale, 'bilinear', reset()[34:34+160, :160]))
     def env_step(action):
         acc_reward = 0.
         for i in xrange(skip_frames):
             im, reward, done = step(action)
+            im = im[34:34+160, :160]
             acc_reward += reward
             if done:
                 break

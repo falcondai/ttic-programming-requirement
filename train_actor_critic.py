@@ -15,7 +15,6 @@ from util import pad_zeros, duplicate_obs, vector_slice, \
 def process_rollout(rewards, reward_gamma, next_state_value=0.):
     acc_reward = next_state_value
     partial_rewards_to_go = []
-    # for i in xrange(delta_tick-1, current_episode_start-1, -1):
     for reward in rewards[::-1]:
         acc_reward = reward + reward_gamma * acc_reward
         partial_rewards_to_go.insert(0, acc_reward)
@@ -131,19 +130,29 @@ def train(train_env, args, build_model):
 
         grad_summaries = []
         grads = []
+        var_list = []
         print '* extra summary'
         for g, v in grad_vars:
             grad_summaries.append(tf.summary.histogram('gradients/%s' % v.name, g))
             print 'gradients/%s' % v.name
             grads.append(g)
+            var_list.append(v)
+
+        # normed_grads, norm = tf.clip_by_global_norm(grads, 40.)
+        # update_op = optimizer.apply_gradients(list(zip(normed_grads, var_list)),
+        #                                       global_step=global_step)
+        # normed_gn = tf.global_norm(normed_grads)
+        norm = tf.global_norm(grads)
 
         per_step_summary = tf.summary.merge(grad_summaries + [
             tf.summary.scalar('model/learning_rate', learning_rate),
+            tf.summary.scalar('model/objective', objective),
             tf.summary.scalar('model/state_value_objective',
                               value_objective),
             tf.summary.scalar('model/policy_objective', policy_objective),
             tf.summary.scalar('model/action_entropy', action_entropy),
-            tf.summary.scalar('model/gradient_norm', tf.global_norm(grads)),
+            tf.summary.scalar('model/gradient_norm', norm),
+            # tf.summary.scalar('model/gradient_norm_after_clip', normed_gn),
             tf.summary.scalar('model/steps_per_second', steps_per_second_ph),
             tf.image_summary('frames', images_ph, max_images=3),
         ])
@@ -217,6 +226,7 @@ def train(train_env, args, build_model):
                 model_input = np.concatenate(observations[-n_obs_ticks:], \
                                              axis=-1)
                 obs.append(model_input)
+                # sample action according to policy
                 action = np.random.choice(env_spec['action_size'], \
                                           p=policy_func(model_input))
                 actions.append(action)
@@ -357,7 +367,7 @@ if __name__ == '__main__':
         if len(env_spec['observation_shape']) == 3 and args.scale != 1.:
             # the observation space is an image
             # env_spec, env_step, env_reset, env_render = scale_env((env_spec, env_step, env_reset, env_render), args.scale, args.interpolation)
-            env_spec, env_step, env_reset, env_render = atari_env((env_spec, env_step, env_reset, env_render), args.scale, 4)
+            env_spec, env_step, env_reset, env_render = atari_env((env_spec, env_step, env_reset, env_render), args.scale, 1)
 
 
     env_spec['timestep_limit'] = min(gym_env.spec.timestep_limit,
