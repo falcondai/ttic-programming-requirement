@@ -8,18 +8,122 @@ import tqdm
 import argparse
 import importlib
 import gym
-from util import pad_zeros, duplicate_obs, vector_slice, \
-    get_current_run_id, restore_vars
+from util import vector_slice, get_current_run_id, restore_vars
+import scipy.signal
 
 
-def process_rollout(rewards, reward_gamma=0.99, next_state_value=0.):
+def discount(x, gamma):
+    # magic formula
+    return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
+    # acc_reward = 0.
+    # partial_rewards_to_go = []
+    # for reward in x[::-1]:
+    #     acc_reward = reward + gamma * acc_reward
+    #     partial_rewards_to_go.insert(0, acc_reward)
+    # return np.asarray(partial_rewards_to_go)
+
+def process_rollout_gae(rewards, values, gamma, lambda_=1.0, r=0.):
+    """
+    given a rollout, compute its returns and the advantage
+    """
+
+    # this formula for the advantage comes "Generalized Advantage Estimation":
+    # https://arxiv.org/abs/1506.02438
+    rewards = np.asarray(rewards)
+    vpred_t = np.asarray(values + [r])
+    delta_t = rewards + gamma * vpred_t[1:] - vpred_t[:-1]
+    batch_adv = discount(delta_t, gamma * lambda_)
+
+    rewards_plus_v = np.asarray(list(rewards) + [r])
+    batch_r = discount(rewards_plus_v, gamma)[:-1]
+    return batch_r, batch_adv
+
+def process_rollout(rewards, vhats, reward_gamma=0.99, next_state_value=0.):
     # reward_gamma < 1. prevents value function from being a constant function
     acc_reward = next_state_value
     partial_rewards_to_go = []
     for reward in rewards[::-1]:
         acc_reward = reward + reward_gamma * acc_reward
         partial_rewards_to_go.insert(0, acc_reward)
-    return partial_rewards_to_go
+
+    vhats = np.asarray(list(vhats) + [next_state_value])
+    # A(s, a) = Q(s, a) - V(s) = E[r + V(s') - V(s)]
+    advantages = np.asarray(rewards) + reward_gamma * vhats[1:] - vhats[:-1]
+    return partial_rewards_to_go, advantages
+
+def partial_rollout(env, pi_v_func, zero_state=None, n_ticks=None):
+    env_spec, env_step, env_reset, env_render = env
+
+    done = True
+    delta_tick = 0
+    tick = 0
+    while True:
+        # on-policy rollout
+        if done:
+            obs, actions, rewards, terminals, vhats, info = [], [], [], [], [], {}
+            rollout_start = time.time()
+
+            # reset the env
+            observation = env_reset()
+
+            if zero_state != None:
+                # initial state for pi_func
+                h = zero_state
+                h0 = h
+
+            # reset episode stats
+            episode_len = 0
+            episode_reward = 0.
+
+        obs.append(observation)
+        # sample action according to policy
+        if zero_state != None:
+            action, v, h = pi_v_func(observation, h)
+        else:
+            action, v = pi_v_func(observation)
+        actions.append(action)
+
+        observation, reward, done = env_step(action)
+        tick += 1
+
+        if env_render != None:
+            env_render()
+
+        rewards.append(reward)
+        vhats.append(v)
+
+        episode_reward += reward
+        episode_len += 1
+        delta_tick += 1
+
+        # enforce time limit
+        if env_spec['timestep_limit'] != None and episode_len >= env_spec['timestep_limit']:
+            done = True
+        terminals.append(done)
+
+        # yield partial rollout
+        if done or (n_ticks != None and delta_tick == n_ticks):
+            # got enough ticks for training
+            # note the `obs` sequence has one extra element than others
+            # the final observation can be used for bootstraping reward-to-go
+            info['rollout_dt'] = time.time() - rollout_start
+            info['tick'] = tick
+            if done:
+                # report episode stats
+                info['episode_len'] = episode_len
+                info['episode_reward'] = episode_reward
+
+            if zero_state != None:
+                info['initial_state'] = h0
+                info['final_state'] = h
+
+            yield obs + [observation], actions, rewards, terminals, vhats, \
+            info
+            rollout_start = time.time()
+            delta_tick = 0
+            obs, actions, rewards, terminals, vhats, info = [], [], [], [], [], {}
+            if not done and zero_state != None:
+                h0 = h
 
 
 def train(env, args, build_model):
@@ -30,7 +134,6 @@ def train(env, args, build_model):
 
     # set seeds
     np.random.seed(args['np_seed'])
-    # tf.set_random_seed(args['tf_seed'])
 
     # create checkpoint dirs
     if not os.path.exists(args['checkpoint_dir']):
@@ -49,18 +152,21 @@ def train(env, args, build_model):
         print '* building model %s' % args['model']
         policy_input_shape = list(env_spec['observation_shape'])
         policy_input_shape[-1] *= args['n_obs_ticks']
-        n_rnn_dim = 128 * 2
         with tf.variable_scope('model'):
-            obs_ph, seq_len_ph, initial_state_ph, action_probs, state_values, _, \
-            pi_func, v_func = build_model(policy_input_shape,
-                                          env_spec['action_size'],
-                                          n_rnn_dim=n_rnn_dim/2)
+            obs_ph, initial_state_ph, action_logits, state_values, _, \
+            pi_v_func, v_func, zero_state = build_model(policy_input_shape,
+                                                        env_spec['action_size'],
+                                                        n_rnn_dim=256)
 
         actions_taken_ph = tf.placeholder('int32')
         target_value_ph = tf.placeholder('float')
+        advantage_ph = tf.placeholder('float')
 
         # entropy regularizer to encourage action diversity
-        log_action_probs = tf.log(action_probs)
+        # log_action_probs = tf.log(action_probs)
+        log_action_probs = tf.nn.log_softmax(action_logits)
+        action_probs = tf.nn.softmax(action_logits)
+
         # action_entropy = - tf.reduce_mean(tf.reduce_sum(action_probs \
                                                     #    * log_action_probs, 1))
         action_entropy = - tf.reduce_sum(action_probs * log_action_probs)
@@ -71,9 +177,8 @@ def train(env, args, build_model):
                                                   - state_values))
 
         # objective for computing policy gradient
-        state_advantage = target_value_ph - state_values
-        policy_objective = tf.reduce_sum(action_logits * \
-                                         tf.stop_gradient(state_advantage))
+        # state_advantage = target_value_ph - state_values
+        policy_objective = tf.reduce_sum(action_logits * advantage_ph)
 
         # total objective
         # maximize policy objective and minimize value objective
@@ -86,7 +191,8 @@ def train(env, args, build_model):
         global_step = tf.Variable(0, trainable=False, name='global_step')
         # global tick counts ticks experienced by the agent
         global_tick = tf.Variable(0, trainable=False, name='global_tick')
-        increment_global_tick = global_tick.assign_add(1)
+        delta_tick_ph = tf.placeholder('int32')
+        increment_global_tick = global_tick.assign_add(delta_tick_ph)
 
         learning_rate = tf.train.exponential_decay(
             args['initial_learning_rate'],
@@ -123,15 +229,14 @@ def train(env, args, build_model):
         ticks_per_second_ph = tf.placeholder('float')
         steps_per_second_ph = tf.placeholder('float')
         images_ph = tf.placeholder('uint8')
-        batch_len_ph = tf.placeholder('float')
+
+        batch_len = tf.to_float(tf.shape(obs_ph)[0])
 
         per_episode_summary = tf.summary.merge([
             tf.summary.scalar('episodic/reward', episode_reward_ph),
             tf.summary.scalar('episodic/length', episode_len_ph),
             tf.summary.scalar('episodic/reward_per_tick',
                               episode_reward_ph / episode_len_ph),
-            tf.summary.scalar('episodic/ticks_per_second',
-                              ticks_per_second_ph)
         ])
 
         grad_summaries = []
@@ -148,24 +253,25 @@ def train(env, args, build_model):
         var_norm = tf.global_norm(var_list)
 
         # gradient clipping
-        # normed_grads, norm = tf.clip_by_global_norm(grads, 40.)
-        # update_op = optimizer.apply_gradients(list(zip(normed_grads, var_list)),
-        #                                       global_step=global_step)
-        # normed_gn = tf.global_norm(normed_grads)
+        normed_grads, norm = tf.clip_by_global_norm(grads, 100.)
+        update_op = optimizer.apply_gradients(list(zip(normed_grads, var_list)),
+                                              global_step=global_step)
+        normed_gn = tf.global_norm(normed_grads)
 
         per_step_summary = tf.summary.merge(grad_summaries + [
             tf.summary.scalar('model/learning_rate', learning_rate),
-            tf.summary.scalar('model/objective', objective / batch_len_ph),
+            tf.summary.scalar('model/objective', objective / batch_len),
             tf.summary.scalar('model/state_value_objective',
-                              value_objective / batch_len_ph),
-            tf.summary.scalar('model/policy_objective', policy_objective / batch_len_ph),
-            tf.summary.scalar('model/action_entropy', action_entropy / batch_len_ph),
-            tf.summary.scalar('model/action_perplexity', tf.exp(action_entropy / batch_len_ph)),
+                              value_objective / batch_len),
+            tf.summary.scalar('model/policy_objective', policy_objective / batch_len),
+            tf.summary.scalar('model/action_entropy', action_entropy / batch_len),
+            tf.summary.scalar('model/action_perplexity', tf.exp(action_entropy / batch_len)),
             tf.summary.scalar('model/gradient_norm', norm),
             tf.summary.scalar('model/var_norm', var_norm),
             tf.summary.scalar('model/steps_per_second', steps_per_second_ph),
-            tf.image_summary('frames', images_ph, max_images=3),
-            # tf.summary.scalar('model/gradient_norm_after_clip', normed_gn),
+            # tf.image_summary('frames', images_ph, max_images=3),
+            tf.summary.scalar('model/ticks_per_second', ticks_per_second_ph),
+            tf.summary.scalar('model/gradient_norm_after_clip', normed_gn),
         ])
 
         saver = tf.train.Saver(max_to_keep=2, \
@@ -182,128 +288,49 @@ def train(env, args, build_model):
             # for v in tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES):
             #     print v.name
 
-            n_ticks = args['n_update_ticks']
-            n_obs_ticks = args['n_obs_ticks']
-            obs = []
-            actions = []
-            rewards = []
-            rewards_to_go = []
-            terminals = []
-            h0 = np.zeros(n_rnn_dim)
-            done = True
-            episode_start = None
-            tick = global_tick.eval()
-            delta_tick, step = 0, 0
+            step = 0
             step_start = time.time()
-            current_episode_start = 0
-            progress_bar = tqdm.trange(args['n_train_steps']).__iter__()
-            while True:
-                # on-policy rollout
-                if done:
-                    # calculate rewards-to-go till the end of last episode
-                    rewards_to_go += process_rollout(rewards[current_episode_start:], args['reward_gamma'])
+            for ro in partial_rollout(env, pi_v_func,
+                                      zero_state=zero_state,
+                                      n_ticks=args['n_update_ticks']):
+                obs, actions, rewards, terminals, vhats, info = ro
+                # print len(obs), len(actions), terminals[-1], info
 
-                    # reset the observations queue
-                    observations = [np.zeros(env_spec['observation_shape'])] \
-                        * (n_obs_ticks - 1)
-                    observations.append(env_reset())
-                    h = np.zeros(n_rnn_dim)
-                    current_episode_start = delta_tick
+                # bootstrap reward-to-go with state value estimate
+                next_state_value = 0. if terminals[-1] else v_func(obs[-1], info['final_state'])
+                # rewards_to_go, advantages = process_rollout(rewards, vhats, args['reward_gamma'], next_state_value)
+                rewards_to_go, advantages = process_rollout_gae(rewards, vhats, args['reward_gamma'], 1., next_state_value)
 
-                    # episode time stats
-                    if episode_start != None:
-                        episode_dt = time.time() - episode_start
-                        # per-episode summary
-                        per_episode_summary_val = per_episode_summary.eval({
-                            episode_reward_ph: episode_reward,
-                            episode_len_ph: episode_len,
-                            ticks_per_second_ph: episode_len / episode_dt,
-                        })
-                        writer.add_summary(per_episode_summary_val, tick)
-                    # reset episode stats
-                    episode_start = time.time()
-                    episode_len = 0
-                    episode_reward = 0.
+                delta_tick = len(actions)
+                tick = info['tick']
+                step_dt = time.time() - step_start
+                step_start = time.time()
 
-                model_input = np.concatenate(observations[-n_obs_ticks:], \
-                                             axis=-1)
-                obs.append(model_input)
-                # sample action according to policy
-                action, h = pi_func(model_input, h)
-                actions.append(action)
+                per_step_summary_val, gt, _ = sess.run([per_step_summary, increment_global_tick, update_op], feed_dict={
+                    obs_ph: obs[:-1],
+                    initial_state_ph: info['initial_state'],
+                    target_value_ph: rewards_to_go,
+                    actions_taken_ph: actions,
+                    advantage_ph: advantages,
+                    steps_per_second_ph: 1. / step_dt,
+                    # images_ph: obs[-4:-1],
+                    delta_tick_ph: delta_tick,
+                    ticks_per_second_ph: delta_tick / info['rollout_dt'],
+                    })
 
-                next_obs, reward, done = env_step(action)
-                if env_render != None:
-                    env_render()
-                observations.append(next_obs)
-                rewards.append(reward)
-                if episode_len >= env_spec['timestep_limit'] - 1:
-                    # enforce time limit
-                    done = True
-                terminals.append(done)
+                writer.add_summary(per_step_summary_val, gt)
 
-                episode_reward += reward
-                episode_len += 1
-                delta_tick += 1
-                tick = increment_global_tick.eval()
+                if terminals[-1]:
+                    per_episode_summary_val = per_episode_summary.eval({
+                        episode_reward_ph: info['episode_reward'],
+                        episode_len_ph: info['episode_len'],
+                    })
+                    writer.add_summary(per_episode_summary_val, gt)
 
-                if done or delta_tick == args['n_update_ticks']:
-                    # got enough ticks for an update
-                    # print delta_tick
-                    if terminals[-1]:
-                        rewards_to_go += process_rollout(rewards[current_episode_start:], args['reward_gamma'])
-                    else:
-                        # use the next state's value to
-                        # estimate rewards-to-go
-                        next_model_input = np.concatenate(observations[-n_obs_ticks:], \
-                                                          axis=-1)
-                        next_state_value = v_func(next_model_input, h)
-                        # print 'final v', next_state_value
-                        rewards_to_go += process_rollout(rewards[current_episode_start:], args['reward_gamma'], next_state_value)
+                if step % args['n_save_interval'] == 0:
+                    saver.save(sess, args['checkpoint_dir'] + '/model',
+                               global_step=global_step.eval(), write_meta_graph=False)
 
-                    step_dt = time.time() - step_start
-                    step_start = time.time()
-
-                    # print
-                    # print np.shape(obs)
-                    # print rewards_to_go, rewards, current_episode_start
-                    per_step_summary_val, _ = sess.run([per_step_summary, update_op], feed_dict={
-                        obs_ph: obs,
-                        seq_len_ph: [delta_tick],
-                        initial_state_ph: [h0],
-                        target_value_ph: np.reshape(rewards_to_go, (-1, 1)),
-                        actions_taken_ph: actions,
-                        steps_per_second_ph: 1 / step_dt,
-                        images_ph: observations[-3:],
-                        batch_len_ph: delta_tick,
-                        })
-                    if done:
-                        h0 = np.zeros(n_rnn_dim)
-                    else:
-                        h0 = h
-                    # write per-step summary
-                    writer.add_summary(per_step_summary_val, tick)
-
-                    observations = observations[-n_obs_ticks:]
-                    obs = []
-                    actions = []
-                    rewards = []
-                    terminals = []
-                    rewards_to_go = []
-                    step += 1
-                    delta_tick = 0
-                    current_episode_start = 0
-                    progress_bar.next()
-                    if step % args['n_save_interval'] == 0:
-                        saver.save(sess, args['checkpoint_dir'] + '/model',
-                                   global_step=global_step.eval(), write_meta_graph=False)
-
-                    if step >= args['n_train_steps']:
-                        break
-
-            # save again at the end
-            saver.save(sess, args['checkpoint_dir'] + '/model',
-                       global_step=global_step.eval())
 
 def build_argparser():
     parse = argparse.ArgumentParser()
@@ -337,7 +364,7 @@ def build_argparser():
     parse.add_argument('--n_update_ticks', type=int, default=256)
     parse.add_argument('--n_batch_ticks', type=int, default=128)
     parse.add_argument('--n_save_interval', type=int, default=8)
-    parse.add_argument('--n_train_steps', type=int, default=10**5)
+    # parse.add_argument('--n_train_steps', type=int, default=10**5)
     parse.add_argument('--n_eval_episodes', type=int, default=4)
     parse.add_argument('--n_eval_interval', type=int, default=8)
 
@@ -355,10 +382,9 @@ def build_argparser():
     parse.add_argument('--initial_learning_rate', type=float, default=0.01)
     parse.add_argument('--n_decay_steps', type=int, default=512)
     parse.add_argument('--no_decay_staircase', action='store_true')
-    parse.add_argument('--decay_rate', type=float, default=0.8)
+    parse.add_argument('--decay_rate', type=float, default=1.)
 
     parse.add_argument('--np_seed', type=int, default=123)
-    parse.add_argument('--tf_seed', type=int, default=1234)
 
     return parse
 
@@ -366,33 +392,34 @@ def build_argparser():
 if __name__ == '__main__':
     from functools import partial
     from util import passthrough, use_render_state, scale_env, atari_env
+    from envs.core import GymEnv
+    from envs.wrappers import GrayscaleWrapper, ScaleWrapper
 
     # arguments
     parse = build_argparser()
     args = parse.parse_args()
 
-    gym_env = gym.make(args.env)
+    # gym_env = gym.make(args.env)
 
-    if args.use_render_state:
-        env_spec, env_step, env_reset, env_render = use_render_state(
-            gym_env, args.scale, args.interpolation)
-    else:
-        env_spec, env_step, env_reset, env_render = passthrough(gym_env)
-        if len(env_spec['observation_shape']) == 3 and args.scale != 1.:
-            # the observation space is an image
-            # env_spec, env_step, env_reset, env_render = scale_env((env_spec, env_step, env_reset, env_render), args.scale, args.interpolation)
-            env_spec, env_step, env_reset, env_render = atari_env((env_spec, env_step, env_reset, env_render), args.scale, 1)
+    # if args.use_render_state:
+    #     env_spec, env_step, env_reset, env_render = use_render_state(
+    #         gym_env, args.scale, args.interpolation)
+    # else:
+    #     env_spec, env_step, env_reset, env_render = passthrough(gym_env)
+    #     if len(env_spec['observation_shape']) == 3 and args.scale != 1.:
+    #         # the observation space is an image
+    #         # env_spec, env_step, env_reset, env_render = scale_env((env_spec, env_step, env_reset, env_render), args.scale, args.interpolation)
+    #         env_spec, env_step, env_reset, env_render = atari_env((env_spec, env_step, env_reset, env_render), args.scale, 1)
+    gym_env = GymEnv(args.env)
+    env = GrayscaleWrapper(ScaleWrapper(gym_env, args.scale))
 
-
-    env_spec['timestep_limit'] = min(env_spec['timestep_limit'],
-                                     args.timestep_limit)
-    env_render = env_render if args.render else None
+    env_render = env.render if args.render else None
 
     print '* environment', args.env
-    print 'observation shape', env_spec['observation_shape']
-    print 'action space', env_spec['action_size']
-    print 'timestep limit', env_spec['timestep_limit']
-    print 'reward threshold', gym_env.spec.reward_threshold
+    print 'observation shape', env.spec['observation_shape']
+    print 'action space', env.spec['action_size']
+    print 'timestep limit', env.spec['timestep_limit']
+    # print 'reward threshold', gym_env.spec.reward_threshold
 
     # model
     model = importlib.import_module('models.%s' % args.model)
@@ -402,7 +429,7 @@ if __name__ == '__main__':
     if args.monitor:
         env.monitor.start(args['monitor_dir'])
 
-    train((env_spec, env_step, env_reset, env_render),
+    train((env.spec, env.step, env.reset, env_render),
           vars(args),
           model.build_model)
 

@@ -232,6 +232,8 @@ def train(train_env, args, build_model):
                 actions.append(action)
 
                 next_obs, reward, done = env_step(action)
+                # motion blur
+                next_obs = 0.5 * next_obs + 0.5 * observations[-1]
                 if env_render != None:
                     env_render()
                 observations.append(next_obs)

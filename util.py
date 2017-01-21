@@ -35,7 +35,7 @@ def vector_slice(A, B):
 def passthrough(gym_env):
     '''use gym environment as is'''
     spec = {
-        'timestep_limit': gym_env.spec.timestep_limit,
+        'timestep_limit': gym_env.spec.timestep_limit if 'timestep_limit' in dir(gym_env.spec) else 10**6, 
         'action_size': gym_env.action_space.n,
         'observation_shape': gym_env.observation_space.shape,
     }
