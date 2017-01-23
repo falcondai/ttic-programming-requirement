@@ -4,6 +4,12 @@ from Queue import deque
 import numpy as np
 import tensorflow as tf
 import glob, os
+import scipy.signal
+
+# reward processing
+def discount(x, gamma):
+    # magic formula for computing gamma-discounted rewards
+    return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
 
 def vector_slice(A, B):
     """ Returns values of rows i of A at column B[i]
@@ -35,7 +41,7 @@ def vector_slice(A, B):
 def passthrough(gym_env):
     '''use gym environment as is'''
     spec = {
-        'timestep_limit': gym_env.spec.timestep_limit if 'timestep_limit' in dir(gym_env.spec) else 10**6, 
+        'timestep_limit': gym_env.spec.timestep_limit if 'timestep_limit' in dir(gym_env.spec) else 10**6,
         'action_size': gym_env.action_space.n,
         'observation_shape': gym_env.observation_space.shape,
     }

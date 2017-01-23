@@ -1,4 +1,5 @@
 import numpy as np
+import time
 
 class Env:
     def __init__(self):
@@ -61,21 +62,30 @@ def repeat_action_wrapper(step, n_repeat):
         return obs, acc_reward, done
     return env_step
 
-def test_env(env):
+def test_env(env, render=True):
+    t0 = time.time()
+    n = 0
     print env.spec
     n_action = env.spec['action_size']
     done = True
     while True:
         if done:
             obs = env.reset()
-            env.render()
+            n += 1
+            if render:
+                env.render()
         action = np.random.randint(n_action)
         obs, reward, done = env.step(action)
-        print np.shape(obs)
-        print action, reward
-        env.render()
+        n += 1
+        if render:
+            env.render()
+        t = time.time()
+        if t - t0 > 5:
+            print '%.2f fps' % (n * 1. / (t - t0))
+            t0 = t
+            n = 0
 
 if __name__ == '__main__':
     # env = GymEnv('CartPole-v0')
     env = GymEnv('Breakout-v0')
-    test_env(env)
+    test_env(env, False)

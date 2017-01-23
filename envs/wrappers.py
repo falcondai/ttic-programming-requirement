@@ -1,20 +1,23 @@
 from core import Env
 from Queue import deque
 import numpy as np
-from util import grayscale_image, scale_image
+import cv2
+
 
 # image state transformers
 
 class ScaleWrapper(Env):
-    def __init__(self, env, scale, interpolation='bilinear', render_fps=30.):
+    def __init__(self, env, scale, interpolation=cv2.INTER_LINEAR, render_fps=30.):
         assert len(env.spec['observation_shape']) == 3
-        scale = float(scale)
+        h, w = env.spec['observation_shape'][:2]
+        # keeping the aspect ratio
+        sw, sh = int(w * scale), int(h * scale)
+        size = (sw, sh)
         self.env = env
-        # FIXME scaling images with shape [, , 1]
-        self.process_ob = lambda ob: scale_image(scale, interpolation, ob)
-        shape = self.process_ob(np.zeros(env.spec['observation_shape'])).shape
+        self.process_ob = lambda ob: cv2.resize(ob, size, interpolation=interpolation)
+
         self.spec = dict(env.spec)
-        self.spec['observation_shape'] = shape
+        self.spec['observation_shape'] = (sh, sw, env.spec['observation_shape'][-1])
         self.spec['id'] = '%s [%.2f scaled]' % (env.spec['id'], scale)
         self.scale = scale
         self.render_fps = render_fps
@@ -32,7 +35,6 @@ class ScaleWrapper(Env):
         return obs, reward, done
 
     def render(self):
-        import cv2
         cv2.imshow(self.spec['id'], np.asarray(self.obs, dtype='uint8'))
         cv2.waitKey(int(1000. / self.render_fps))
 
@@ -60,7 +62,6 @@ class GrayscaleWrapper(Env):
         return obs, reward, done
 
     def render(self):
-        import cv2
         cv2.imshow(self.spec['id'], np.asarray(self.obs, dtype='uint8'))
         cv2.waitKey(int(1000. / self.render_fps))
 
@@ -91,7 +92,6 @@ class StackFrameWrapper(Env):
         return np.asarray(self.observation_queue), reward, done
 
     def render(self):
-        import cv2
         fs = np.concatenate(self.observation_queue, 1)
         cv2.imshow(self.spec['id'], np.asarray(fs, dtype='uint8'))
         cv2.waitKey(int(1000. / self.render_fps))
@@ -118,7 +118,6 @@ class MotionBlurWrapper(Env):
         return self.last_observation, reward, done
 
     def render(self):
-        import cv2
         cv2.imshow(self.spec['id'], np.asarray(self.last_observation, dtype='uint8'))
         cv2.waitKey(int(1000. / self.render_fps))
 
@@ -144,9 +143,10 @@ class KeyMapWrapper(Env):
 
 if __name__ == '__main__':
     from core import test_env, GymEnv
-    env = GymEnv('Pong-v0')
-    # test_env(ScaleWrapper(env, scale=0.5))
+    env = GymEnv('PongDeterministic-v3')
+    test_env(ScaleWrapper(GrayscaleWrapper(env), scale=42./160.), False)
+    # test_env(GrayscaleWrapper(ScaleWrapper(env, scale=42./160.)), False)
     # test_env(GrayscaleWrapper(env))
     # test_env(StackFrameWrapper(GrayscaleWrapper(env)))
-    test_env(MotionBlurWrapper(env))
+    # test_env(MotionBlurWrapper(env))
     # test_env(KeyMapWrapper(env, [2, 3]))
