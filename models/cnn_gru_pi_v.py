@@ -40,7 +40,6 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
         activation_fn=None,
         scope='action_fc1',
     )
-    # action_probs = tf.nn.softmax(action_logits, name='action_probs')
 
     state_values = tf.contrib.layers.fully_connected(
         inputs=rnn_outputs,

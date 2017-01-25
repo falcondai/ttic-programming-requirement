@@ -47,10 +47,10 @@ def load_policy(sess, checkpoint_path, meta_path, model_type, policy_type, epsil
             obs_ph: [obs_val],
             initial_state_ph: rnn_state_val,
         })
-        # visualize('conv1', conv1_val)
-        # visualize('conv2', conv2_val)
-        # visualize('conv3', conv3_val)
-        # visualize('conv4', conv4_val)
+        visualize('conv1', conv1_val)
+        visualize('conv2', conv2_val)
+        visualize('conv3', conv3_val)
+        visualize('conv4', conv4_val)
         return action_val[0, 0], state_value_val[0], next_rnn_state_val
 
     return pi_v_func

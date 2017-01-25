@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 import tensorflow as tf
-import argparse, os
+import argparse, os, importlib
 
 from envs.core import GymEnv
 from envs.wrappers import GrayscaleWrapper, ScaleWrapper
-from a3c import A3C
-from models.cnn_gru_pi_v import build_model
+from a3c import A3C, add_arguments
+# from models.cnn_gru_pi_v import build_model
 
 class FastSaver(tf.train.Saver):
     # HACK disable saving metagraphs
@@ -22,14 +22,14 @@ def build_cluster(n_workers):
         })
     return cluster
 
-def run(args, server):
+def run(args, server, build_model):
     summary_dir = os.path.join(args.log_dir, 'worker-%i' % args.task_index)
     checkpoint_dir = os.path.join(args.log_dir, 'checkpoints')
     writer = tf.summary.FileWriter(summary_dir, flush_secs=30)
 
     gym_env = GymEnv(args.env_id)
     env = GrayscaleWrapper(ScaleWrapper(gym_env, args.scale))
-    trainer = A3C(env.spec, env.reset, env.step, build_model, args.task_index, writer, vars(args))
+    trainer = A3C(env.spec, env.reset, env.step, build_model, args.task_index, writer, args)
 
     # save non-local variables
     variables_to_save = [v for v in tf.global_variables() if not v.name.startswith('local')]
@@ -67,13 +67,12 @@ if __name__ == '__main__':
     parser.add_argument('--task-index', default=0, type=int)
     parser.add_argument('--env-id', default='PongDeterministic-v3')
     parser.add_argument('--scale', type=float, default=0.5)
-    parser.add_argument('--interpolation', choices=['nearest', 'bilinear', 'bicubic', 'cubic'], default='bilinear')
-    parser.add_argument('--action-entropy-coeff', type=float, default=0.01)
-    parser.add_argument('--value-objective-coeff', type=float, default=0.1)
-    parser.add_argument('--reward-gamma', type=float, default=0.99)
-    parser.add_argument('--td-lambda', type=float, default=1.)
-    parser.add_argument('--n-update-ticks', type=int, default=20)
-    parser.add_argument('--log-dir', type=str, default='/tmp/pongd-1')
+    parser.add_argument('--model', type=str, default='cnn_gru_pi_v')
+    # parser.add_argument('--interpolation', choices=['nearest', 'bilinear', 'bicubic', 'cubic'], default='bilinear')
+    parser.add_argument('--log-dir', type=str, default='/tmp/pongd')
+
+    # add additional A3C arguments
+    add_arguments(parser)
 
     args = parser.parse_args()
 
@@ -84,7 +83,8 @@ if __name__ == '__main__':
     if args.job == 'worker':
         # worker
         server = tf.train.Server(cluster, job_name=args.job, task_index=args.task_index, config=config)
-        run(args, server)
+        model = importlib.import_module('models.%s' % args.model)
+        run(args, server, model.build_model)
     else:
         # parameter server
         server = tf.train.Server(cluster, job_name='ps', task_index=args.task_index, config=config)

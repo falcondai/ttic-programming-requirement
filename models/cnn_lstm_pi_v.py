@@ -4,7 +4,7 @@ import numpy as np
 def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_dim=256):
     obs_ph = tf.placeholder('float', [batch] + list(observation_shape),
                             name='observation')
-    initial_state_ph = tf.placeholder('float', [batch, 2 * n_rnn_dim], name='initial_state')
+    initial_state_ph = tf.placeholder('float', [2, batch, n_rnn_dim], name='initial_state')
     tf.add_to_collection('inputs', obs_ph)
     tf.add_to_collection('inputs', initial_state_ph)
 
@@ -24,12 +24,11 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
     rnn_input = tf.expand_dims(net, 0)
 
     # rnn
-    # cell = tf.contrib.rnn.LSTMBlockCell(n_rnn_dim)
-    cell = tf.nn.rnn_cell.BasicLSTMCell(n_rnn_dim, state_is_tuple=False)
+    cell = tf.contrib.rnn.LSTMBlockCell(n_rnn_dim)
 
+    lstm_state_tuple = tuple(tf.unstack(initial_state_ph))
     seq_len = tf.shape(obs_ph)[:1]
-    rnn_outputs, final_state = tf.nn.dynamic_rnn(cell, rnn_input, seq_len,
-                                                 initial_state_ph)
+    rnn_outputs, final_state = tf.nn.dynamic_rnn(cell, rnn_input, seq_len, lstm_state_tuple)
     rnn_outputs = tf.squeeze(rnn_outputs, 0)
 
     # prediction outputs
@@ -41,7 +40,6 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
         activation_fn=None,
         scope='action_fc1',
     )
-    # action_probs = tf.nn.softmax(action_logits, name='action_probs')
 
     state_values = tf.contrib.layers.fully_connected(
         inputs=rnn_outputs,
@@ -59,7 +57,7 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
 
     # policy function
     action = tf.multinomial(action_logits, 1)
-    def pi_v_func(obs_val, rnn_state_val):
+    def pi_v_h_func(obs_val, rnn_state_val):
         sess = tf.get_default_session()
         action_val, state_value_val, next_rnn_state_val = sess.run([action, state_values, final_state], {
             obs_ph: [obs_val],
@@ -74,8 +72,8 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
             initial_state_ph: rnn_state_val,
         })[0]
 
-    zero_state = np.zeros((1, 2 * n_rnn_dim))
+    zero_state = np.zeros((2, 1, n_rnn_dim))
 
     return obs_ph, initial_state_ph, \
     action_logits, state_values, final_state, \
-    pi_v_func, v_func, zero_state
+    pi_v_h_func, v_func, zero_state
