@@ -2,10 +2,8 @@
 import tensorflow as tf
 import argparse, os, importlib
 
-from envs.core import GymEnv
-from envs.wrappers import GrayscaleWrapper, ScaleWrapper
+from envs import GymEnv, DoomEnv, GrayscaleWrapper, ScaleWrapper, MotionBlurWrapper
 from a3c import A3C, add_arguments
-# from models.cnn_gru_pi_v import build_model
 
 class FastSaver(tf.train.Saver):
     # HACK disable saving metagraphs
@@ -27,8 +25,11 @@ def run(args, server, build_model):
     checkpoint_dir = os.path.join(args.log_dir, 'checkpoints')
     writer = tf.summary.FileWriter(summary_dir, flush_secs=30)
 
-    gym_env = GymEnv(args.env_id)
-    env = GrayscaleWrapper(ScaleWrapper(gym_env, args.scale))
+    # gym_env = GymEnv(args.env_id)
+    gym_env = DoomEnv('scenarios/basic.cfg')
+    env = MotionBlurWrapper(ScaleWrapper(GrayscaleWrapper(gym_env), args.scale))
+    print '* environment spec:'
+    print env.spec
     trainer = A3C(env.spec, env.reset, env.step, build_model, args.task_index, writer, args)
 
     # save non-local variables

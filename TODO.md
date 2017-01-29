@@ -1,11 +1,14 @@
 # TODO
 
 ## implementation
+- change arg parser to partial parse
 - implement eval script
-- visualize estimated value using a fixed height line plot (see cubismJS)
+- implement continuous action models
+- add tuple type for state
+- adversarial games
 
 ## experiments
-- switch to LSTMBlockCell and test speed
+- FF and RNN on simple gym classic env's
 - test on multi-GPU machines
 - FF slower than RNN?
 - try motion blur with RNN

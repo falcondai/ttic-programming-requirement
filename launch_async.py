@@ -7,24 +7,28 @@ def new_tmux_cmd(name, cmd):
     return name, "tmux send-keys -t {} '{}' Enter".format(name, cmd)
 
 
-def create_tmux_commands(session, num_workers, env_id, logdir):
+def create_tmux_commands(session, num_workers, env_id, logdir, model, use_gpu, port, extra_args):
     # for launching the TF workers and for launching tensorboard
     base_cmd = [
-        'CUDA_VISIBLE_DEVICES=', sys.executable, 'async_node.py',
+        sys.executable, 'async_node.py',
         '--log-dir', logdir, '--env-id', env_id,
         '--n-workers', str(num_workers), '--clip-norm', str(100.)]
+
+    if not use_gpu:
+        # hide GPU from tensorflow
+        base_cmd = ['CUDA_VISIBLE_DEVICES='] + base_cmd
 
     # parameter server
     cmds_map = [new_tmux_cmd('ps', base_cmd + ['--job', 'ps'])]
     # workers
     for i in range(num_workers):
         cmds_map += [new_tmux_cmd(
-            'w-%d' % i, base_cmd + ['--job', 'worker', '--task-index', str(i)])]
+            'w-%d' % i, base_cmd + ['--job', 'worker', '--task-index', str(i), '--model', model] + extra)]
 
     # tensorboard
-    cmds_map += [new_tmux_cmd('tb', ['tensorboard --logdir {} --port 12345'.format(logdir)])]
+    cmds_map += [new_tmux_cmd('tb', ['tensorboard --logdir {} --port {}'.format(logdir, port)])]
     # htop
-    cmds_map += [new_tmux_cmd('htop', ['htop'])]
+    # cmds_map += [new_tmux_cmd('htop', ['htop'])]
 
     windows = [v[0] for v in cmds_map]
 
@@ -43,16 +47,17 @@ def create_tmux_commands(session, num_workers, env_id, logdir):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Run commands')
-    parser.add_argument('-w', '--n-workers', default=1, type=int,
-                        help="Number of workers")
-    parser.add_argument('-e', '--env-id', type=str, default='PongDeterministic-v3',
-                        help="Environment id")
-    parser.add_argument('-l', '--log-dir', type=str, default="/tmp/pong",
-                        help="Log directory path")
+    parser = argparse.ArgumentParser()
 
-    args = parser.parse_args()
+    parser.add_argument('-w', '--n-workers', default=1, type=int, help='number of workers')
+    parser.add_argument('-e', '--env-id', type=str, default='PongDeterministic-v3', help='environment id')
+    parser.add_argument('-l', '--log-dir', type=str, default='/tmp/pong', help='checkpoint directory path')
+    parser.add_argument('-m', '--model', type=str, default='cnn_gru_pi_v', help='model name')
+    parser.add_argument('-g', '--use-gpu', action='store_true', help='use GPU for training')
+    parser.add_argument('-p', '--port', type=int, help='port for tensorboard', default=12345)
 
-    cmds = create_tmux_commands('a3c', args.n_workers, args.env_id, args.log_dir)
+    args, extra = parser.parse_known_args()
+
+    cmds = create_tmux_commands('a3c', args.n_workers, args.env_id, args.log_dir, args.model, args.use_gpu, args.port, extra)
     print('\n'.join(cmds))
     os.system('\n'.join(cmds))

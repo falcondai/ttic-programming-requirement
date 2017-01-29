@@ -13,6 +13,11 @@ def half_size_atari(env_id):
 
 if __name__ == '__main__':
     from core import test_env
-    env = half_size_atari('Pong-v0')
+    import sys
+
+    # env = half_size_atari('Pong-v0')
     # env = MotionBlurAtariEnv('Pong-v0', scale=1.)
+    env_id = sys.argv[1]
+    # env = half_size_atari(env_id)
+    env = ScaleWrapper(GymEnv(env_id), 0.5)
     test_env(env)

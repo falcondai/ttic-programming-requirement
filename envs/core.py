@@ -6,7 +6,7 @@ class Env:
         self.spec = {
             'id': '',
             'observation_shape': [],
-            'action_size': [],
+            'action_size': 0,
             'timestep_limit': 1,
         }
 
@@ -67,15 +67,24 @@ def test_env(env, render=True):
     n = 0
     print env.spec
     n_action = env.spec['action_size']
-    done = True
+    obs = env.reset()
+    done = False
+    episode_reward = 0.
+    episode_length = 0
+    print 'obs shape', np.shape(obs)
     while True:
         if done:
             obs = env.reset()
+            print 'reward', episode_reward, 'length', episode_length
+            episode_reward = 0.
+            episode_length = 0
             n += 1
             if render:
                 env.render()
         action = np.random.randint(n_action)
         obs, reward, done = env.step(action)
+        episode_length += 1
+        episode_reward += reward
         n += 1
         if render:
             env.render()

@@ -4,7 +4,7 @@ MAINTAINER Falcon Dai <me@falcondai.com>
 
 RUN apt-get update && apt-get install -y cmake libopencv-dev python-opencv tmux htop
 
-RUN pip install tqdm gym
+RUN pip install tqdm gym vizdoom
 RUN pip install gym[atari]
 
 WORKDIR /root

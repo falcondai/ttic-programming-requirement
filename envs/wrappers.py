@@ -1,20 +1,22 @@
 from core import Env
+from visualize import render_image
 from Queue import deque
 import numpy as np
 import cv2
 
+# common utilities
 
 # image state transformers
-
 class ScaleWrapper(Env):
     def __init__(self, env, scale, interpolation=cv2.INTER_LINEAR, render_fps=30.):
         assert len(env.spec['observation_shape']) == 3
+        self.is_grayscale = env.spec['observation_shape'][-1] == 1
         h, w = env.spec['observation_shape'][:2]
         # keeping the aspect ratio
         sw, sh = int(w * scale), int(h * scale)
-        size = (sw, sh)
+        self.size = (sw, sh)
+        self.interpolation = interpolation
         self.env = env
-        self.process_ob = lambda ob: cv2.resize(ob, size, interpolation=interpolation)
 
         self.spec = dict(env.spec)
         self.spec['observation_shape'] = (sh, sw, env.spec['observation_shape'][-1])
@@ -22,6 +24,13 @@ class ScaleWrapper(Env):
         self.scale = scale
         self.render_fps = render_fps
         self.obs = None
+
+    def process_ob(self, ob):
+        sob = cv2.resize(ob, self.size, interpolation=self.interpolation)
+        if self.is_grayscale:
+            # XXX cv2 automatically squeezes output?!
+            return np.expand_dims(sob, -1)
+        return sob
 
     def reset(self):
         obs = self.process_ob(self.env.reset())
@@ -35,8 +44,7 @@ class ScaleWrapper(Env):
         return obs, reward, done
 
     def render(self):
-        cv2.imshow(self.spec['id'], np.asarray(self.obs, dtype='uint8'))
-        cv2.waitKey(int(1000. / self.render_fps))
+        render_image(self.spec['id'], self.obs, self.render_fps, self.is_grayscale)
 
 class GrayscaleWrapper(Env):
     def __init__(self, env, render_fps=30.):
@@ -62,12 +70,12 @@ class GrayscaleWrapper(Env):
         return obs, reward, done
 
     def render(self):
-        cv2.imshow(self.spec['id'], np.asarray(self.obs, dtype='uint8'))
-        cv2.waitKey(int(1000. / self.render_fps))
+        render_image(self.spec['id'], self.obs, self.render_fps, True)
 
 class StackFrameWrapper(Env):
     def __init__(self, env, stack_frames=4, render_fps=30.):
         assert len(env.spec['observation_shape']) == 3
+        self.is_grayscale = env.spec['observation_shape'][-1] == 1
         self.env = env
         shape = [stack_frames] + list(env.spec['observation_shape'])
         self.spec = dict(env.spec)
@@ -93,12 +101,12 @@ class StackFrameWrapper(Env):
 
     def render(self):
         fs = np.concatenate(self.observation_queue, 1)
-        cv2.imshow(self.spec['id'], np.asarray(fs, dtype='uint8'))
-        cv2.waitKey(int(1000. / self.render_fps))
+        render_image(self.spec['id'], fs, self.render_fps, self.is_grayscale)
 
 class MotionBlurWrapper(Env):
     def __init__(self, env, mix_coeff=0.6, render_fps=30.):
         assert len(env.spec['observation_shape']) == 3
+        self.is_grayscale = env.spec['observation_shape'][-1] == 1
         self.env = env
         self.spec = dict(env.spec)
         self.spec['id'] = '%s [motion blur]' % env.spec['id']
@@ -118,8 +126,7 @@ class MotionBlurWrapper(Env):
         return self.last_observation, reward, done
 
     def render(self):
-        cv2.imshow(self.spec['id'], np.asarray(self.last_observation, dtype='uint8'))
-        cv2.waitKey(int(1000. / self.render_fps))
+        render_image(self.spec['id'], self.last_observation, self.render_fps, self.is_grayscale)
 
 # action transformers
 
@@ -143,10 +150,17 @@ class KeyMapWrapper(Env):
 
 if __name__ == '__main__':
     from core import test_env, GymEnv
-    env = GymEnv('PongDeterministic-v3')
-    test_env(ScaleWrapper(GrayscaleWrapper(env), scale=42./160.), False)
+    # env = GymEnv('PongDeterministic-v3')
+    # env = GymEnv('SpaceInvadersDeterministic-v3')
+    env = GymEnv('BreakoutDeterministic-v3')
+
+    # env = ScaleWrapper(GrayscaleWrapper(env), scale=0.5, render_fps=10.)
+    # slower
+    # env = GrayscaleWrapper(ScaleWrapper(env, scale=42./160.))
+
+    test_env(MotionBlurWrapper(env, render_fps=10.))
+    # test_env(env, True)
     # test_env(GrayscaleWrapper(ScaleWrapper(env, scale=42./160.)), False)
     # test_env(GrayscaleWrapper(env))
     # test_env(StackFrameWrapper(GrayscaleWrapper(env)))
-    # test_env(MotionBlurWrapper(env))
     # test_env(KeyMapWrapper(env, [2, 3]))
