@@ -3,7 +3,7 @@
 import tensorflow as tf
 import numpy as np
 import time
-from util import vector_slice, discount, partial_rollout, mask_slice
+from util import vector_slice, discount, partial_rollout, mask_slice, get_optimizer
 
 
 def process_rollout_gae(rewards, values, gamma, td_lambda=1.0, r=0.):
@@ -42,12 +42,7 @@ class A3C(object):
                 self.global_tick = global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
                 # shared the optimizer
                 if args.shared:
-                    if args.optimizer == 'adam':
-                        optimizer = tf.train.AdamOptimizer(args.learning_rate)
-                    elif args.optimizer == 'rmsprop':
-                        optimizer = tf.train.RMSPropOptimizer(args.learning_rate, momentum=args.momentum, centered=True)
-                    else:
-                        optimizer = tf.train.MomentumOptimizer(args.learning_rate, momentum=args.momentum)
+                    optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
                 gv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
         # local only
@@ -113,12 +108,7 @@ class A3C(object):
 
             # local optimizer
             if not args.shared:
-                if args.optimizer == 'adam':
-                    optimizer = tf.train.AdamOptimizer(args.learning_rate)
-                elif args.optimizer == 'rmsprop':
-                    optimizer = tf.train.RMSPropOptimizer(args.learning_rate, momentum=args.momentum, centered=True)
-                else:
-                    optimizer = tf.train.MomentumOptimizer(args.learning_rate, momentum=args.momentum)
+                optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
 
             if args.no_grad_clip:
                 normed_grads = grads

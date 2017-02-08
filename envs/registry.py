@@ -22,3 +22,10 @@ def get_env(env_id):
     # Doom envs
     if parts[0] == doom_env_prefix:
         return get_doom_env('.'.join(parts[1:]))
+
+if __name__ == '__main__':
+    import sys
+    from core import test_env
+
+    env = get_env(sys.argv[1])
+    test_env(env)

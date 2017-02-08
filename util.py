@@ -92,6 +92,15 @@ def mask_slice(x, a, depth=None):
     mask = tf.one_hot(a, depth, axis=-1, dtype=tf.float32)
     return tf.reduce_sum(x * mask, 1)
 
+def get_optimizer(opt_name, learning_rate, momentum):
+    if opt_name == 'adam':
+        optimizer = tf.train.AdamOptimizer(learning_rate)
+    elif opt_name == 'rmsprop':
+        optimizer = tf.train.RMSPropOptimizer(learning_rate, momentum=momentum, centered=True)
+    else:
+        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=momentum)
+    return optimizer
+
 # define an environment as a 4-tuple
 # {
 #     spec: {
