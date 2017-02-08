@@ -7,29 +7,15 @@ from functools import partial
 import tqdm
 import argparse
 import gym
-from gym import envs
 from util import rollout, vector_slice, to_greedy, to_epsilon_greedy, \
                  test_restore_vars, atari_env
 from train_unified import partial_rollout
 import cv2
 from visualize import HorizonChart, ImageStackChart
 
-value_chart = HorizonChart(1000, 0.005, 100)
-perplexity_chart = HorizonChart(1000, 6./100, 100)
-conv_chart = ImageStackChart()
-
-def visualize(win_name, conv_output, fps=30.):
-    im = np.transpose(conv_output[0], [2, 0, 1])
-    # normalize per image
-    min_im = im.min(1, keepdims=True).min(2, keepdims=True)
-    ptp_im = im.ptp(1).ptp(1).reshape((-1, 1, 1))
-    im = (im - min_im) / ptp_im
-
-    im = np.hstack(im)
-    cv2.imshow(win_name, im)
-    cv2.waitKey(int(1000. / fps))
-    # pause at each frame, need to manually unpause
-    # cv2.waitKey(0)
+value_chart = HorizonChart(1000, 0.005, 100, title='state value')
+perplexity_chart = HorizonChart(1000, 6./100, 100, title='action perplexity')
+conv_charts = [ImageStackChart(2.**k, title='conv%i' % k) for k in xrange(4)]
 
 def load_policy(sess, checkpoint_path, meta_path, model_type, policy_type, epsilon):
     test_restore_vars(sess, checkpoint_path, meta_path)
@@ -56,25 +42,19 @@ def load_policy(sess, checkpoint_path, meta_path, model_type, policy_type, epsil
             obs_ph: [obs_val],
             initial_state_ph: rnn_state_val,
         })
-        # visualize('conv1', conv1_val)
-        # visualize('conv2', conv2_val)
-        # visualize('conv3', conv3_val)
-        # visualize('conv4', conv4_val)
 
-        # conv_chart.update(conv1_val[0])
-        # cv2.imshow('conv1', conv_chart.im)
-        # cv2.waitKey(int(1000./30.))
+        for k, (chart, conv) in enumerate(zip(conv_charts, [conv1_val, conv2_val, conv3_val, conv4_val])):
+            chart.update(conv[0])
+            chart.draw()
 
         value_chart.update(state_value_val)
-        cv2.imshow('value', value_chart.im)
-        cv2.waitKey(int(1000./30.))
+        value_chart.draw()
         perplexity_chart.update(perplexity_val)
-        cv2.imshow('action perplexity', perplexity_chart.im)
-        cv2.waitKey(int(1000./30.))
+        perplexity_chart.draw()
 
         # disturb
-        if np.random.rand() < 0.1:
-            action_val[0, 0] = np.random.randint(6)
+        # if np.random.rand() < 0.1:
+        #     action_val[0, 0] = np.random.randint(6)
 
         return action_val[0, 0], state_value_val[0], next_rnn_state_val
 

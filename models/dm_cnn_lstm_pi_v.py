@@ -5,6 +5,8 @@ import tensorflow as tf
 import numpy as np
 
 def build_model(observation_shape, n_actions, batch=None, n_rnn_dim=256):
+    assert len(observation_shape) == 3
+
     obs_ph = tf.placeholder('float', [batch] + list(observation_shape), name='observation')
     initial_state_ph = tf.placeholder('float', [2, batch, n_rnn_dim], name='initial_state')
     tf.add_to_collection('inputs', obs_ph)

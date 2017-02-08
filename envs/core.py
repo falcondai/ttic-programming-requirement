@@ -42,7 +42,7 @@ class GymEnv(Env):
         obs, reward, done, info = self.gym_env.step(action)
         self.timestep += 1
         # enforce timestep_limit
-        if self.spec['timestep_limit'] != None and self.timestep > self.spec['timestep_limit']:
+        if self.spec['timestep_limit'] != None and self.timestep == self.spec['timestep_limit']:
             done = True
         return obs, reward, done
 
@@ -89,12 +89,15 @@ def test_env(env, render=True):
         if render:
             env.render()
         t = time.time()
+        # calculate FPS every 5 seconds
         if t - t0 > 5:
             print '%.2f fps' % (n * 1. / (t - t0))
             t0 = t
             n = 0
 
 if __name__ == '__main__':
-    # env = GymEnv('CartPole-v0')
-    env = GymEnv('Breakout-v0')
+    import sys
+
+    env_id = sys.argv[1]
+    env = GymEnv(env_id)
     test_env(env, False)

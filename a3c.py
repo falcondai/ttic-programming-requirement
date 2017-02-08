@@ -2,82 +2,25 @@
 
 import tensorflow as tf
 import numpy as np
-import time, itertools, itertools
-from util import vector_slice, discount
+import time
+from util import vector_slice, discount, partial_rollout, mask_slice
 
 
-def process_rollout_gae(rewards, values, gamma, lambda_=1.0, r=0.):
+def process_rollout_gae(rewards, values, gamma, td_lambda=1.0, r=0.):
     """
     given a rollout, compute its returns and the advantage
     """
 
-    # this formula for the advantage comes "Generalized Advantage Estimation":
+    # TD(lambda) advantage calculation from "Generalized Advantage Estimation":
     # https://arxiv.org/abs/1506.02438
     rewards = np.asarray(rewards)
     vpred_t = np.asarray(values + [r])
     delta_t = rewards + gamma * vpred_t[1:] - vpred_t[:-1]
-    batch_adv = discount(delta_t, gamma * lambda_)
+    advantage = discount(delta_t, gamma * td_lambda)
 
     rewards_plus_v = np.asarray(list(rewards) + [r])
-    batch_r = discount(rewards_plus_v, gamma)[:-1]
-    return batch_r, batch_adv
-
-def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None):
-    done = True
-    tick = 0
-    while True:
-        rollout_start = time.time()
-        # on-policy rollout
-        if done:
-            # reset episode stats
-            episode_len = 0
-            episode_reward = 0.
-
-            # reset the env
-            observation = env_reset()
-
-            # initial rnn state
-            h = zero_state
-            h0 = h
-
-        obs, actions, rewards, terminals, vhats, info = [], [], [], [], [], {}
-        # sample some ticks for training
-        for t in xrange(n_ticks) if n_ticks != None else itertools.count():
-            obs.append(observation)
-            # sample action according to policy
-            action, v, h = pi_v_h_func(observation, h)
-            actions.append(action)
-
-            observation, reward, done = env_step(action)
-            tick += 1
-
-            rewards.append(reward)
-            vhats.append(v)
-
-            episode_reward += reward
-            episode_len += 1
-
-            terminals.append(done)
-
-            if done:
-                # stop rollout at the end of the episode
-                break
-
-        # yield partial rollout
-        info['rollout_dt'] = time.time() - rollout_start
-        info['tick'] = tick
-        if done:
-            # report episode stats
-            info['episode_len'] = episode_len
-            info['episode_reward'] = episode_reward
-
-        info['initial_state'] = h0
-        info['final_state'] = h
-        h0 = h
-
-        # note the `obs` sequence has one extra final element than others
-        # the final observation can be used for bootstraping reward-to-go
-        yield obs + [observation], actions, rewards, terminals, vhats, info
+    reward_to_go = discount(rewards_plus_v, gamma)[:-1]
+    return reward_to_go, advantage
 
 
 class A3C(object):
@@ -95,14 +38,22 @@ class A3C(object):
         # on parameter server and locally
         with tf.device(tf.train.replica_device_setter(ps_tasks=1, worker_device=worker_device)):
             with tf.variable_scope('global'):
-                build_model(env_spec['observation_shape'], env_spec['action_size'], n_rnn_dim=args.n_rnn_dim)
+                build_model(env_spec['observation_shape'], env_spec['action_size'])
                 self.global_tick = global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
+                # shared the optimizer
+                if args.shared:
+                    if args.optimizer == 'adam':
+                        optimizer = tf.train.AdamOptimizer(args.learning_rate)
+                    elif args.optimizer == 'rmsprop':
+                        optimizer = tf.train.RMSPropOptimizer(args.learning_rate, momentum=args.momentum, centered=True)
+                    else:
+                        optimizer = tf.train.MomentumOptimizer(args.learning_rate, momentum=args.momentum)
                 gv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
         # local only
         with tf.device(worker_device):
             with tf.variable_scope('local'):
-                self.obs_ph, self.initial_state_ph, action_logits, state_values, _, self.pi_v_h_func, self.v_func, self.zero_state = build_model(env_spec['observation_shape'], env_spec['action_size'], n_rnn_dim=args.n_rnn_dim)
+                self.obs_ph, self.initial_state_ph, action_logits, state_values, _, self.pi_v_h_func, self.v_func, self.zero_state = build_model(env_spec['observation_shape'], env_spec['action_size'])
                 lv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
             self.local_step = 0
@@ -119,13 +70,14 @@ class A3C(object):
             action_probs = tf.nn.softmax(action_logits)
 
             action_entropy = - tf.reduce_sum(action_probs * log_action_probs)
-            action_logits = vector_slice(log_action_probs, actions_taken_ph)
+            taken_action_logits = vector_slice(log_action_probs, actions_taken_ph)
+            # taken_action_logits = mask_slice(log_action_probs, actions_taken_ph)
 
             # objective for value estimation
             value_objective = tf.reduce_sum(tf.square(target_value_ph - state_values))
 
             # objective for computing policy gradient
-            policy_objective = tf.reduce_sum(action_logits * advantage_ph)
+            policy_objective = tf.reduce_sum(taken_action_logits * advantage_ph)
 
             # total objective
             # maximize policy objective
@@ -133,7 +85,6 @@ class A3C(object):
             # maximize action entropy
             objective = - policy_objective + args.value_objective_coeff * value_objective - args.action_entropy_coeff * action_entropy
 
-            optimizer = tf.train.AdamOptimizer(args.learning_rate)
             grads = tf.gradients(objective, lv)
             # apply gradients to the global parameters
             batch_len = tf.shape(self.obs_ph)[0]
@@ -160,8 +111,23 @@ class A3C(object):
             norm = tf.global_norm(grads)
             var_norm = tf.global_norm(lv)
 
-            # gradient clipping
-            normed_grads, _ = tf.clip_by_global_norm(grads, args.clip_norm, norm)
+            # local optimizer
+            if not args.shared:
+                if args.optimizer == 'adam':
+                    optimizer = tf.train.AdamOptimizer(args.learning_rate)
+                elif args.optimizer == 'rmsprop':
+                    optimizer = tf.train.RMSPropOptimizer(args.learning_rate, momentum=args.momentum, centered=True)
+                else:
+                    optimizer = tf.train.MomentumOptimizer(args.learning_rate, momentum=args.momentum)
+
+            if args.no_grad_clip:
+                normed_grads = grads
+                clipped_norm = norm
+            else:
+                # gradient clipping
+                normed_grads, _ = tf.clip_by_global_norm(grads, args.clip_norm, norm)
+                clipped_norm = tf.minimum(args.clip_norm, norm)
+
             self.update_op = tf.group(optimizer.apply_gradients(zip(normed_grads, gv)), inc_tick)
 
             self.summary_interval = args.summary_interval
@@ -177,11 +143,14 @@ class A3C(object):
                     tf.summary.scalar('model/policy_objective', policy_objective * per_batch_len),
                     tf.summary.scalar('model/action_perplexity', tf.exp(action_entropy * per_batch_len)),
                     tf.summary.scalar('model/gradient_norm', norm),
-                    tf.summary.scalar('model/clipped_gradient_norm', tf.minimum(args.clip_norm, norm)),
+                    tf.summary.scalar('model/clipped_gradient_norm', clipped_norm),
                     tf.summary.scalar('model/var_norm', var_norm),
                     tf.summary.scalar('chief/steps_per_second', steps_per_second_ph),
                     tf.summary.scalar('chief/ticks_per_second', ticks_per_second_ph),
                 ])
+
+                # save the meta graph
+                tf.train.export_meta_graph('%s/model.meta' % args.log_dir)
 
             self.rollout_generator = partial_rollout(env_reset, env_step, self.pi_v_h_func, zero_state=self.zero_state, n_ticks=args.n_update_ticks)
             self.step_start_at = None
@@ -209,13 +178,16 @@ class A3C(object):
 
         feed = {
             self.obs_ph: obs[:-1],
-            self.initial_state_ph: info['initial_state'],
             self.target_value_ph: rewards_to_go,
             self.actions_taken_ph: actions,
             self.advantage_ph: advantages,
             self.steps_per_second_ph: 1. / step_dt,
             self.ticks_per_second_ph: delta_tick / info['rollout_dt'],
             }
+
+        # for RNN models
+        if self.initial_state_ph != None:
+            feed[self.initial_state_ph] = info['initial_state']
 
         if self.is_chief and self.local_step % self.summary_interval == 0:
             per_episode_summary_val, _, gt = sess.run([self.per_step_summary, self.update_op, self.global_tick], feed_dict=feed)
@@ -226,7 +198,7 @@ class A3C(object):
         self.local_step += 1
 
         if terminals[-1]:
-            print 'tick', info['tick'], 'reward', info['episode_reward'], 'episode length', info['episode_len']
+            print 'worker', self.task_index, 'tick', info['tick'], 'reward', info['episode_reward'], 'episode length', info['episode_len']
 
             per_episode_summary_val = self.per_episode_summary.eval({
                 self.episode_reward_ph: info['episode_reward'],
@@ -241,6 +213,10 @@ def add_arguments(parser):
     parser.add_argument('--td-lambda', type=float, default=1.)
     parser.add_argument('--n-update-ticks', type=int, default=20)
     parser.add_argument('--n-rnn-dim', type=int, default=256)
+    parser.add_argument('--no-grad-clip', action='store_true')
     parser.add_argument('--clip-norm', type=float, default=40.)
     parser.add_argument('--summary-interval', type=int, default=16)
+    parser.add_argument('--optimizer', choices=['adam', 'rmsprop', 'momentum'], default='adam')
     parser.add_argument('--learning-rate', type=float, default=1e-4)
+    parser.add_argument('--momentum', type=float, default=0.)
+    parser.add_argument('--shared', action='store_true')

@@ -5,6 +5,7 @@
 # using the ideas from https://square.github.io/cubism/
 
 import numpy as np
+from image import render_image
 
 def fold(series, resolution, height, baseline=0.):
     '''
@@ -42,7 +43,7 @@ def shade(step, positive_color=np.asarray([255, 0, 0]), negative_color=np.asarra
     return color
 
 class HorizonChart(object):
-    def __init__(self, length, resolution, height, baseline=0., positive_color=[255, 0, 0], negative_color=[0, 0, 255], background_color=[255, 255, 255]):
+    def __init__(self, length, resolution, height, baseline=0., positive_color=[0, 0, 255], negative_color=[255, 0, 0], background_color=[255, 255, 255], title='horizon', fps=60.):
         self.length = int(length)
         self.height = int(height)
         self.resolution = resolution
@@ -53,6 +54,9 @@ class HorizonChart(object):
 
         self.im = np.zeros((height, length, 3), dtype=np.uint8)
         self.im[:, :] = self.background_color
+
+        self.fps = fps
+        self.title = title
 
     def update(self, y):
         s, yp = fold_y(y, self.resolution, self.height, self.baseline)
@@ -68,6 +72,10 @@ class HorizonChart(object):
             self.im[:self.height-yp, -1] = c
             if s < -1:
                 self.im[self.height-yp:, -1] = shade(s + 1, self.positive_color, self.negative_color, self.background_color)
+
+    def draw(self):
+        render_image(self.title, self.im, self.fps, False)
+
 
 if __name__ == '__main__':
     import cv2

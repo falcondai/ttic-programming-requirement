@@ -1,23 +1,26 @@
-import numpy as np
-
 from core import GymEnv
-from wrappers import GrayscaleWrapper, ScaleWrapper
+from wrappers import GrayscaleWrapper, ScaleWrapper, MotionBlurWrapper
 
-
-def half_size_atari(env_id):
-    # commonly used resizing grayscale
-    # use atari games via OpenAI gym
-    env = GymEnv(env_id)
-    return ScaleWrapper(GrayscaleWrapper(env), scale=0.5)
+def get_atari_env(env_id):
+    '''use atari game envs from OpenAI gym. `env_id` should have format `type.game_title`.'''
+    parts = env_id.split('.')
+    if parts[0] == 'skip':
+        # atari games skipping 4 frames (3 for SpaceInvaders)
+        env = GymEnv('%sDeterministic-v3' % parts[-1])
+        if parts[1] == 'gray':
+            return MotionBlurWrapper(GrayscaleWrapper(env), mix_coeff=0.6)
+        if parts[1] == 'half':
+            return MotionBlurWrapper(ScaleWrapper(GrayscaleWrapper(env), scale=0.5), mix_coeff=0.6)
+        if parts[1] == 'quarter':
+            return MotionBlurWrapper(ScaleWrapper(GrayscaleWrapper(env), scale=0.25), mix_coeff=0.6)
+        return env
+    # atari games with no frame skipping
+    return GymEnv('%sNoFrameskip-v3' % parts[0])
 
 
 if __name__ == '__main__':
     from core import test_env
     import sys
 
-    # env = half_size_atari('Pong-v0')
-    # env = MotionBlurAtariEnv('Pong-v0', scale=1.)
     env_id = sys.argv[1]
-    # env = half_size_atari(env_id)
-    env = ScaleWrapper(GymEnv(env_id), 0.5)
-    test_env(env)
+    test_env(get_atari_env(env_id))

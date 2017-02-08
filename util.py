@@ -3,13 +3,71 @@ from functools import partial
 from Queue import deque
 import numpy as np
 import tensorflow as tf
-import glob, os
+import glob, os, time, itertools
 import scipy.signal
 
 # reward processing
 def discount(x, gamma):
     # magic formula for computing gamma-discounted rewards
     return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
+
+# rollout
+def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None):
+    done = True
+    tick = 0
+    while True:
+        rollout_start = time.time()
+        # on-policy rollout
+        if done:
+            # reset episode stats
+            episode_len = 0
+            episode_reward = 0.
+
+            # reset the env
+            observation = env_reset()
+
+            # initial rnn state
+            h = zero_state
+            h0 = h
+
+        obs, actions, rewards, terminals, vhats, info = [], [], [], [], [], {}
+        # sample some ticks for training
+        for t in xrange(n_ticks) if n_ticks != None else itertools.count():
+            obs.append(observation)
+            # sample action according to policy
+            action, v, h = pi_v_h_func(observation, h)
+            actions.append(action)
+
+            observation, reward, done = env_step(action)
+            tick += 1
+
+            rewards.append(reward)
+            vhats.append(v)
+
+            episode_reward += reward
+            episode_len += 1
+
+            terminals.append(done)
+
+            if done:
+                # stop rollout at the end of the episode
+                break
+
+        # yield partial rollout
+        info['rollout_dt'] = time.time() - rollout_start
+        info['tick'] = tick
+        if done:
+            # report episode stats
+            info['episode_len'] = episode_len
+            info['episode_reward'] = episode_reward
+
+        info['initial_state'] = h0
+        info['final_state'] = h
+        h0 = h
+
+        # note the `obs` sequence has one extra final element than others
+        # the final observation can be used for bootstraping reward-to-go
+        yield obs + [observation], actions, rewards, terminals, vhats, info
 
 def vector_slice(A, B):
     """ Returns values of rows i of A at column B[i]
@@ -25,6 +83,14 @@ def vector_slice(A, B):
     linear_index = (tf.shape(A)[1] * tf.range(0, tf.shape(A)[0]))
     linear_A = tf.reshape(A, [-1])
     return tf.gather(linear_A, B + linear_index)
+
+def mask_slice(x, a, depth=None):
+    ''' same output as `vector_slice` but implement via one-hot masking
+    '''
+    if depth == None:
+        depth = x.get_shape()[1]
+    mask = tf.one_hot(a, depth, axis=-1, dtype=tf.float32)
+    return tf.reduce_sum(x * mask, 1)
 
 # define an environment as a 4-tuple
 # {
