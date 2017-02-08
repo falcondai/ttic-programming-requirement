@@ -2,7 +2,6 @@
 
 ## implementation
 - refactor TD(lambda) and eligibility traces
-- implement eval script
 - change arg parser to partial parse
 - implement continuous action models
 - add tuple type for state (gym has StateTuple)
@@ -21,7 +20,6 @@
 ## experiments
 - gym classic env's with FF and RNN
 - gym atari env's with RNN
-- vizdoom basic env with RNN
 - test on multi-GPU machines
 - FF slower than RNN?
 - try motion blur with RNN

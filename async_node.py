@@ -34,6 +34,9 @@ def run(args, server, env, build_model):
     saver = FastSaver(variables_to_save,
                       keep_checkpoint_every_n_hours=1,
                       max_to_keep=2)
+    # save metagraph
+    if args.task_index == 0:
+        saver.export_meta_graph(os.path.join(checkpoint_dir, 'model.meta'))
 
     sv = tf.train.Supervisor(
         is_chief=(args.task_index == 0),

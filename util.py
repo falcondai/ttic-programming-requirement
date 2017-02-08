@@ -12,7 +12,7 @@ def discount(x, gamma):
     return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
 
 # rollout
-def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None):
+def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None, env_render=None):
     done = True
     tick = 0
     while True:
@@ -25,6 +25,9 @@ def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None):
 
             # reset the env
             observation = env_reset()
+
+            if env_render != None:
+                env_render()
 
             # initial rnn state
             h = zero_state
@@ -39,6 +42,9 @@ def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None):
             actions.append(action)
 
             observation, reward, done = env_step(action)
+            if env_render != None:
+                env_render()
+                
             tick += 1
 
             rewards.append(reward)
@@ -237,13 +243,10 @@ def to_epsilon_greedy(epsilon, policy_prob_func, obs):
 
 # tensorflow utility
 def test_restore_vars(sess, checkpoint_path, meta_path):
-    """ Restore saved net, global score and step, and epsilons OR
-    create checkpoint directory for later storage. """
-    saver = tf.train.import_meta_graph(meta_path)
-    saver.restore(sess, checkpoint_path)
-
-    print '* restoring from %s' % checkpoint_path
+    ''' Restore graph from metagraph then values from checkpoint '''
     print '* using metagraph from %s' % meta_path
+    saver = tf.train.import_meta_graph(meta_path, clear_devices=True)
+    print '* restoring from %s' % checkpoint_path
     saver.restore(sess, checkpoint_path)
     return True
 
@@ -254,8 +257,7 @@ def get_current_run_id(checkpoint_dir):
     return sorted(map(lambda p: int(p.split('.')[-2]), paths))[-1] + 1
 
 def restore_vars(saver, sess, checkpoint_dir, restart=False):
-    ''' Restore saved net, global score and step, and epsilons OR
-    create checkpoint directory for later storage. '''
+    ''' Restore values OR initialize '''
     sess.run([tf.global_variables_initializer(), tf.local_variables_initializer()])
 
     if not restart:

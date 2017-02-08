@@ -139,9 +139,6 @@ class A3C(object):
                     tf.summary.scalar('chief/ticks_per_second', ticks_per_second_ph),
                 ])
 
-                # save the meta graph
-                tf.train.export_meta_graph('%s/model.meta' % args.log_dir)
-
             self.rollout_generator = partial_rollout(env_reset, env_step, self.pi_v_h_func, zero_state=self.zero_state, n_ticks=args.n_update_ticks)
             self.step_start_at = None
 
