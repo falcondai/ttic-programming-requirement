@@ -11,7 +11,7 @@ class FastSaver(tf.train.Saver):
         super(FastSaver, self).save(sess, save_path, global_step, latest_filename, meta_graph_suffix, False)
 
 
-def build_cluster(n_workers, ps_port=2220):
+def build_cluster(n_workers, ps_port):
     host = 'localhost'
     cluster = tf.train.ClusterSpec({
         'ps': ['%s:%d' % (host, ps_port)],
@@ -70,13 +70,14 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--env-id', type=str, default='atari.skip.quarter.Pong')
     parser.add_argument('-m', '--model', type=str, default='cnn_gru_pi_v')
     parser.add_argument('--log-dir', type=str, default='/tmp/pongd')
+    parser.add_argument('--cluster-port', type=int, default=2220)
 
     # add additional A3C arguments
     add_arguments(parser)
 
     args = parser.parse_args()
 
-    cluster = build_cluster(args.n_workers)
+    cluster = build_cluster(args.n_workers, args.cluster_port)
     config = tf.ConfigProto(gpu_options={
             'allow_growth': True,
         }, intra_op_parallelism_threads=2)

@@ -8,8 +8,8 @@ def new_tmux_cmd(name, cmd):
 
 def create_tmux_commands(session, num_workers, logdir, use_gpu, port, extra_args):
     # for launching the TF workers and for launching tensorboard
-    base_cmd = [
-        sys.executable, 'async_node.py', '--log-dir', logdir, '--n-workers', str(num_workers)]
+    # cluster start from the next port
+    base_cmd = [sys.executable, 'async_node.py', '--log-dir', logdir, '--n-workers', num_workers, '--cluster-port', port + 1]
 
     if not use_gpu:
         # hide GPU from tensorflow
@@ -19,8 +19,7 @@ def create_tmux_commands(session, num_workers, logdir, use_gpu, port, extra_args
     cmds_map = [new_tmux_cmd('ps', base_cmd + ['--job', 'ps'])]
     # workers
     for i in range(num_workers):
-        cmds_map += [new_tmux_cmd(
-            'w-%d' % i, base_cmd + ['--job', 'worker', '--task-index', str(i)] + extra)]
+        cmds_map += [new_tmux_cmd( 'w-%d' % i, base_cmd + ['--job', 'worker', '--task-index', str(i)] + extra)]
 
     # tensorboard
     cmds_map += [new_tmux_cmd('tb', ['tensorboard --logdir {} --port {}'.format(logdir, port)])]
@@ -29,7 +28,6 @@ def create_tmux_commands(session, num_workers, logdir, use_gpu, port, extra_args
 
     cmds = [
         'mkdir -p {}'.format(logdir),
-        'tmux kill-session',
         'tmux new-session -s {} -n {} -d'.format(session, windows[0]),
     ]
     for w in windows[1:]:
@@ -51,6 +49,6 @@ if __name__ == "__main__":
 
     args, extra = parser.parse_known_args()
 
-    cmds = create_tmux_commands('a3c', args.n_workers, args.log_dir, args.use_gpu, args.port, extra)
+    cmds = create_tmux_commands(os.path.basename(args.log_dir), args.n_workers, args.log_dir, args.use_gpu, args.port, extra)
     print('\n'.join(cmds))
     os.system('\n'.join(cmds))

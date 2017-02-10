@@ -9,10 +9,10 @@ import argparse, os, sys
 def slurm_cmd(cmd):
     return ' '.join(str(v) for v in cmd)
 
-def create_slurm_commands(session, num_workers, logdir, use_gpu, port, extra_args):
+def create_slurm_commands(num_workers, logdir, use_gpu, port, extra_args):
     # for launching the TF workers and for launching tensorboard
     base_cmd = [
-        sys.executable, 'async_node.py', '--log-dir', logdir, '--n-workers', num_workers]
+        sys.executable, 'async_node.py', '--log-dir', logdir, '--n-workers', num_workers, '--cluster-port', port + 1]
 
     if not use_gpu:
         # hide GPU from tensorflow
@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
     args, extra = parser.parse_known_args()
 
-    cmds = create_slurm_commands('a3c', args.n_workers, args.log_dir, args.use_gpu, args.port, extra)
+    cmds = create_slurm_commands(args.n_workers, args.log_dir, args.use_gpu, args.port, extra)
 
     # generate and print the bash script for `sbatch`
     # can be piped into `sbatch` command to execute directly

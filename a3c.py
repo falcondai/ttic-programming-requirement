@@ -139,7 +139,9 @@ class A3C(object):
                     tf.summary.scalar('chief/ticks_per_second', ticks_per_second_ph),
                 ])
 
-            self.rollout_generator = partial_rollout(env_reset, env_step, self.pi_v_h_func, zero_state=self.zero_state, n_ticks=args.n_update_ticks)
+            n_update_ticks = None if args.n_update_ticks == 0 else args.n_update_ticks
+
+            self.rollout_generator = partial_rollout(env_reset, env_step, self.pi_v_h_func, zero_state=self.zero_state, n_ticks=n_update_ticks)
             self.step_start_at = None
 
 
@@ -198,9 +200,9 @@ def add_arguments(parser):
     parser.add_argument('--value-objective-coeff', type=float, default=0.1)
     parser.add_argument('--reward-gamma', type=float, default=0.99)
     parser.add_argument('--td-lambda', type=float, default=1.)
-    parser.add_argument('--n-update-ticks', type=int, default=20)
+    parser.add_argument('--n-update-ticks', type=int, default=20, help='update batch size, 0 for full episodes')
     parser.add_argument('--n-rnn-dim', type=int, default=256)
-    parser.add_argument('--no-grad-clip', action='store_true')
+    parser.add_argument('--no-grad-clip', action='store_true', help='disable gradient clipping')
     parser.add_argument('--clip-norm', type=float, default=40.)
     parser.add_argument('--summary-interval', type=int, default=16)
     parser.add_argument('--optimizer', choices=['adam', 'rmsprop', 'momentum'], default='adam')

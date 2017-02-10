@@ -7,10 +7,12 @@
 - add tuple type for state (gym has StateTuple)
 - human agent (needs to be env-specific, doom -> spectator mode, atari -> WASD, etc)
 - algorithmic envs
+- clean up and integrate the old RL algo impl
+- add agent class (add ob_space/action_space to env.spec)
 
 ## envs
+- start multiple baxter-gazebo?
 - mujoco
-- mountain-car
 - discrete ob space games (maze)
 - mnist glimpse
 - mnist/cifar-10 compression
