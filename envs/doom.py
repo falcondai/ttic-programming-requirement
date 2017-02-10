@@ -92,10 +92,10 @@ class DoomEnv(Env):
 
     def render(self):
         # TODO show other buffers
-        if self.game.get_state():
-            render_image('depth', np.expand_dims(self.game.get_state().depth_buffer, -1), self.render_fps, True)
-            render_image('automap', np.expand_dims(self.game.get_state().automap_buffer, -1), self.render_fps, True)
-            render_image('label', np.expand_dims(self.game.get_state().labels_buffer, -1), self.render_fps, True)
+        # if self.game.get_state():
+        #     render_image('depth', np.expand_dims(self.game.get_state().depth_buffer, -1), self.render_fps, True)
+        #     render_image('automap', np.expand_dims(self.game.get_state().automap_buffer, -1), self.render_fps, True)
+        #     render_image('label', np.expand_dims(self.game.get_state().labels_buffer, -1), self.render_fps, True)
         render_image(self.spec['id'], self.last_ob, self.render_fps, self.use_grayscale)
 
 def get_doom_env(env_id):

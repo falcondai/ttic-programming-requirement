@@ -9,6 +9,7 @@
 - algorithmic envs
 - clean up and integrate the old RL algo impl
 - add agent class (add ob_space/action_space to env.spec)
+- agent registry
 
 ## envs
 - start multiple baxter-gazebo?
