@@ -44,6 +44,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-render', action='store_true')
     parser.add_argument('-e', '--env-id', default='atari.skip.quarter.Pong')
     parser.add_argument('-m', '--model', required=True)
+    parser.add_argument('-u', '--unwrap', type=int, default=0)
 
     args = parser.parse_args()
 
@@ -55,7 +56,14 @@ if __name__ == '__main__':
 
     # init env
     env = get_env(args.env_id)
-    env_render = None if args.no_render else env.render
+    if not args.no_render:
+        # HACK unwrap to use base env's render
+        _env = env
+        for i in xrange(args.unwrap):
+            _env = _env.env
+        env_render = _env.render
+    else:
+        env_render = None
 
     print '* environment'
     print env.spec
