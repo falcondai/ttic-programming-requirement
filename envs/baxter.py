@@ -221,6 +221,8 @@ def distance(x, y):
 
 class BaxterIkEnv(Env):
     def __init__(self, limb='left', dtheta=0.05, step_dt=1./30., goal_threshold=0.1, timestep_limit=300):
+        assert limb in ['left', 'right']
+
         # setup
         rospy.init_node('ik_env_%s' % limb)
         rs = baxter_interface.RobotEnable(baxter_interface.CHECK_VERSION)
@@ -241,7 +243,7 @@ class BaxterIkEnv(Env):
         self.step_dt = step_dt
 
         self.spec = {
-            'id': 'baxter-ik',
+            'id': 'baxter-ik-%s' % self.limb,
             'observation_shape': (n_joints + 3,),
             'action_size': len(self.action_map),
             'timestep_limit': timestep_limit,
@@ -282,8 +284,8 @@ class BaxterIkEnv(Env):
         # self.arm.move_to_joint_positions(c, 0.5)
         # self.arm.set_joint_positions(c)
 
-        t0 = time.time()
-        while time.time() - t0 < self.step_dt:
+        t0 = rospy.get_time()
+        while rospy.get_time() - t0 < self.step_dt:
             self.arm.set_joint_positions(c)
             # self.arm.set_joint_velocities(v)
 
@@ -307,9 +309,17 @@ class BaxterIkEnv(Env):
         # print self.arm.joint_angles()
         print self._get_endpoint_position(), distance(self.goal, self._get_endpoint_position()), self._check_goal()
 
+def get_baxter_env(env_id):
+    parts = env_id.split('.')
+    if parts[0] == 'ik':
+        if parts[-1] == 'left':
+            return BaxterIkEnv(limb='left')
+        return BaxterIkEnv(limb='right')
+
+
 if __name__ == '__main__':
     from core import test_env
-    # env = BaxterReachEnv()
-    env = BaxterIkEnv()
-    test_env(env)
-    # rospy.spin()
+    import sys
+
+    env = BaxterIkEnv(sys.argv[1])
+    test_env(env, False)
