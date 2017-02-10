@@ -8,10 +8,7 @@ from envs import get_env
 from visualize import HorizonChart, ImageStackChart
 from test import evaluate
 
-def wrap_policy(n_cnn_layers=4):
-    obs_ph, initial_state_ph = tf.get_collection('inputs', scope='global')
-    action_logits, state_values, final_state = tf.get_collection('outputs', scope='global')
-
+def wrap_policy(obs_ph, initial_state_ph, action_logits, state_values, final_state, n_cnn_layers=4, value_resolution=0.005, action_resolution=6./100):
     action_probs = tf.nn.softmax(action_logits)
     log_action_probs = tf.nn.log_softmax(action_logits)
     action_entropy = -tf.reduce_sum(log_action_probs * action_probs)
@@ -23,8 +20,8 @@ def wrap_policy(n_cnn_layers=4):
     convs = [g.get_tensor_by_name('global/conv%i/Elu:0' % (k+1)) for k in xrange(n_cnn_layers)]
 
     # charts
-    value_chart = HorizonChart(1000, 0.005, 100, title='state value')
-    perplexity_chart = HorizonChart(1000, 6./100, 100, title='action perplexity')
+    value_chart = HorizonChart(1000, value_resolution, 100, title='state value')
+    perplexity_chart = HorizonChart(1000, action_resolution, 100, title='action perplexity')
     conv_charts = [ImageStackChart(2.**k, title='conv%i' % (k+1)) for k in xrange(n_cnn_layers)]
 
     def pi_v_func(obs_val, history):
@@ -59,6 +56,9 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint-path')
     parser.add_argument('-e', '--env-id', default='atari.skip.quarter.Pong')
     parser.add_argument('-m', '--model', default='cnn_gru_pi_v')
+    parser.add_argument('-u', '--unwrap', type=int, default=3)
+    parser.add_argument('--n-cnn-layers', type=int, default=0)
+    parser.add_argument('--value-resolution', type=float, default=0.005)
 
     args = parser.parse_args()
 
@@ -70,8 +70,11 @@ if __name__ == '__main__':
 
     # init env
     env = get_env(args.env_id)
-    # HACK use the base env's render
-    env_render = env.env.env.env.render
+    # HACK unwrap to use base env's render
+    _env = env
+    for i in xrange(args.unwrap):
+        _env = _env.env
+    env_render = _env.render
 
     print '* environment'
     print env.spec
@@ -79,8 +82,9 @@ if __name__ == '__main__':
     # build model
     model = importlib.import_module('models.%s' % args.model)
     with tf.variable_scope('global'):
-        pi, v, z = model.build_model(env.spec['observation_shape'], env.spec['action_size'])[-3:]
-        pi = wrap_policy()
+        model_vs = model.build_model(env.spec['observation_shape'], env.spec['action_size'])
+        pi, v, z = model_vs[-3:]
+        pi = wrap_policy(*model_vs[:5], n_cnn_layers=args.n_cnn_layers, value_resolution=args.value_resolution)
     saver = tf.train.Saver()
 
     # eval
