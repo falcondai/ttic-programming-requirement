@@ -1,7 +1,11 @@
 from core import GymEnv
 from atari import get_atari_env
 from doom import get_doom_env
-from wrappers import GrayscaleWrapper, ScaleWrapper, MotionBlurWrapper
+try:
+    from baxter import get_baxter_env
+except:
+    def get_baxter_env(env_id):
+        print 'baxter.* envs not available'
 
 def get_env(env_id):
     '''env_id is a string of the format `prefix.env_name`'''
@@ -10,6 +14,7 @@ def get_env(env_id):
     gym_env_prefix = 'gym'
     atari_env_prefix = 'atari'
     doom_env_prefix = 'doom'
+    baxter_env_prefix = 'baxter'
 
     # envs from OpenAI gym with no wrappers
     if parts[0] == gym_env_prefix:
@@ -22,6 +27,10 @@ def get_env(env_id):
     # Doom envs
     if parts[0] == doom_env_prefix:
         return get_doom_env('.'.join(parts[1:]))
+
+    # Baxter envs
+    if parts[0] == baxter_env_prefix:
+        return get_baxter_env('.'.join(parts[1:]))
 
 if __name__ == '__main__':
     import sys
