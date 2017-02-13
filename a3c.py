@@ -3,27 +3,16 @@
 import tensorflow as tf
 import numpy as np
 import time
-from util import vector_slice, discount, partial_rollout, mask_slice, get_optimizer
+from util import vector_slice, discount, partial_rollout, mask_slice, get_optimizer, mc_return, n_step_return, td_return, lambda_return
 
-
-def process_rollout_gae(rewards, values, gamma, td_lambda=1.0, r=0.):
-    """
-    given a rollout, compute its returns and the advantage
-    """
-
-    # TD(lambda) advantage calculation from "Generalized Advantage Estimation":
-    # https://arxiv.org/abs/1506.02438
-    rewards = np.asarray(rewards)
-    vpred_t = np.asarray(values + [r])
-    delta_t = rewards + gamma * vpred_t[1:] - vpred_t[:-1]
-    advantage = discount(delta_t, gamma * td_lambda)
-
-    rewards_plus_v = np.asarray(list(rewards) + [r])
-    reward_to_go = discount(rewards_plus_v, gamma)[:-1]
-    return reward_to_go, advantage
-
+def lambda_advantage(rewards, values, gamma, td_lambda, bootstrap_value):
+    td_advantage = td_return(rewards, values, gamma, bootstrap_value) - values
+    # these terms telescope into lambda_advantage = G_t^lambda - V(S_t)
+    lambda_advantage = discount(td_advantage, gamma * td_lambda)
+    return lambda_advantage
 
 class A3C(object):
+    ''' trainer for asynchronous advantage actor critic algorithm '''
     def __init__(self, env_spec, env_reset, env_step, build_model, task_index, writer, args):
         print '* A3C arguments:'
         vargs = vars(args)
@@ -39,7 +28,7 @@ class A3C(object):
         with tf.device(tf.train.replica_device_setter(ps_tasks=1, worker_device=worker_device)):
             with tf.variable_scope('global'):
                 build_model(env_spec['observation_shape'], env_spec['action_size'])
-                self.global_tick = global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
+                self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
                 # shared the optimizer
                 if args.shared:
                     optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
@@ -56,23 +45,23 @@ class A3C(object):
             self.sync_op = tf.group(*[v1.assign(v2) for v1, v2 in zip(lv, gv)])
 
             # define objectives
-            self.actions_taken_ph = actions_taken_ph = tf.placeholder('int32')
-            self.target_value_ph = target_value_ph = tf.placeholder('float')
-            self.advantage_ph = advantage_ph = tf.placeholder('float')
+            self.actions_taken_ph = tf.placeholder('int32')
+            self.target_value_ph = tf.placeholder('float')
+            self.advantage_ph = tf.placeholder('float')
 
             # entropy regularizer to encourage action diversity
             log_action_probs = tf.nn.log_softmax(action_logits)
             action_probs = tf.nn.softmax(action_logits)
 
             action_entropy = - tf.reduce_sum(action_probs * log_action_probs)
-            taken_action_logits = vector_slice(log_action_probs, actions_taken_ph)
+            taken_action_logits = vector_slice(log_action_probs, self.actions_taken_ph)
             # taken_action_logits = mask_slice(log_action_probs, actions_taken_ph)
 
             # objective for value estimation
-            value_objective = tf.reduce_sum(tf.square(target_value_ph - state_values))
+            value_objective = tf.reduce_sum(tf.square(self.target_value_ph - state_values))
 
             # objective for computing policy gradient
-            policy_objective = tf.reduce_sum(taken_action_logits * advantage_ph)
+            policy_objective = tf.reduce_sum(taken_action_logits * self.advantage_ph)
 
             # total objective
             # maximize policy objective
@@ -84,23 +73,26 @@ class A3C(object):
             # apply gradients to the global parameters
             batch_len = tf.shape(self.obs_ph)[0]
             per_batch_len = 1. / tf.to_float(batch_len)
-            inc_tick = global_tick.assign_add(batch_len)
+            inc_tick = self.global_tick.assign_add(batch_len)
 
             self.reward_gamma = args.reward_gamma
-            self.td_lambda = args.td_lambda
+            self.return_lambda = args.return_lambda
+            self.return_n_step = args.return_n_step
+            self.advantage_lambda = args.advantage_lambda
+            self.advantage_n_step = args.advantage_n_step
 
             self.writer = writer
 
             # summaries
-            self.episode_len_ph = episode_len_ph = tf.placeholder('float', name='episode_len')
-            self.episode_reward_ph = episode_reward_ph = tf.placeholder('float', name='episode_reward')
-            self.ticks_per_second_ph = ticks_per_second_ph = tf.placeholder('float', name='ticks_per_second')
-            self.steps_per_second_ph = steps_per_second_ph = tf.placeholder('float', name='steps_per_second')
+            self.episode_len_ph = tf.placeholder('float', name='episode_len')
+            self.episode_reward_ph = tf.placeholder('float', name='episode_reward')
+            self.ticks_per_second_ph = tf.placeholder('float', name='ticks_per_second')
+            self.steps_per_second_ph = tf.placeholder('float', name='steps_per_second')
 
             self.per_episode_summary = tf.summary.merge([
-                tf.summary.scalar('episodic/reward', episode_reward_ph),
-                tf.summary.scalar('episodic/length', episode_len_ph),
-                tf.summary.scalar('episodic/reward_per_tick', episode_reward_ph / episode_len_ph),
+                tf.summary.scalar('episodic/reward', self.episode_reward_ph),
+                tf.summary.scalar('episodic/length', self.episode_len_ph),
+                tf.summary.scalar('episodic/reward_per_tick', self.episode_reward_ph / self.episode_len_ph),
             ])
 
             norm = tf.global_norm(grads)
@@ -135,8 +127,8 @@ class A3C(object):
                     tf.summary.scalar('model/gradient_norm', norm),
                     tf.summary.scalar('model/clipped_gradient_norm', clipped_norm),
                     tf.summary.scalar('model/var_norm', var_norm),
-                    tf.summary.scalar('chief/steps_per_second', steps_per_second_ph),
-                    tf.summary.scalar('chief/ticks_per_second', ticks_per_second_ph),
+                    tf.summary.scalar('chief/steps_per_second', self.steps_per_second_ph),
+                    tf.summary.scalar('chief/ticks_per_second', self.ticks_per_second_ph),
                 ])
 
             n_update_ticks = None if args.n_update_ticks == 0 else args.n_update_ticks
@@ -144,6 +136,24 @@ class A3C(object):
             self.rollout_generator = partial_rollout(env_reset, env_step, self.pi_v_h_func, zero_state=self.zero_state, n_ticks=n_update_ticks)
             self.step_start_at = None
 
+            # process returns and advantages
+            if args.return_eval == 'td':
+                self.process_returns = lambda rewards, values, bootstrap_value: td_return(rewards, values, self.reward_gamma, bootstrap_value)
+            elif args.return_eval == 'mc':
+                self.process_returns = lambda rewards, values, bootstrap_value: mc_return(rewards, self.reward_gamma, bootstrap_value)
+            elif args.return_eval == 'n-step':
+                self.process_returns = lambda rewards, values, bootstrap_value: n_step_return(rewards, values, self.reward_gamma, bootstrap_value, self.return_n_step)
+            else:
+                self.process_returns = lambda rewards, values, bootstrap_value: lambda_return(rewards, values, self.reward_gamma, self.return_lambda, bootstrap_value)
+
+            if args.advantage_eval == 'td':
+                self.process_advantages = lambda rewards, values, bootstrap_value: td_return(rewards, values, self.reward_gamma, bootstrap_value) - values
+            elif args.advantage_eval == 'mc':
+                self.process_advantages = lambda rewards, values, bootstrap_value: mc_return(rewards, self.reward_gamma, bootstrap_value) - values
+            elif args.advantage_eval == 'n-step':
+                self.process_advantages = lambda rewards, values, bootstrap_value: n_step_return(rewards, values, self.reward_gamma, bootstrap_value, self.advantage_n_step) - values
+            else:
+                self.process_advantages = lambda rewards, values, bootstrap_value: lambda_advantage(rewards, values, self.reward_gamma, self.advantage_lambda, bootstrap_value)
 
     def train(self, sess):
         if self.step_start_at != None:
@@ -157,21 +167,20 @@ class A3C(object):
 
         # sample a partial rollout
         ro = self.rollout_generator.next()
-        obs, actions, rewards, terminals, vhats, info = ro
+        obs, actions, rewards, vhats, done, info = ro
 
-        # bootstrap reward-to-go with state value estimate
-        next_state_value = 0. if terminals[-1] else self.v_func(obs[-1], info['final_state'])
-        rewards_to_go, advantages = process_rollout_gae(rewards, vhats, self.reward_gamma, self.td_lambda, next_state_value)
-
-        delta_tick = len(actions)
+        # bootstrap returns with state value estimate
+        bootstrap_value = 0. if done else self.v_func(obs[-1], info['final_state'])
+        returns = self.process_returns(rewards, vhats, bootstrap_value)
+        advantages = self.process_advantages(rewards, vhats, bootstrap_value)
 
         feed = {
             self.obs_ph: obs[:-1],
-            self.target_value_ph: rewards_to_go,
+            self.target_value_ph: returns,
             self.actions_taken_ph: actions,
             self.advantage_ph: advantages,
             self.steps_per_second_ph: 1. / step_dt,
-            self.ticks_per_second_ph: delta_tick / info['rollout_dt'],
+            self.ticks_per_second_ph: len(actions) / info['rollout_dt'],
             }
 
         # for RNN models
@@ -186,7 +195,7 @@ class A3C(object):
 
         self.local_step += 1
 
-        if terminals[-1]:
+        if done:
             print 'worker', self.task_index, 'tick', info['tick'], 'reward', info['episode_reward'], 'episode length', info['episode_len']
 
             per_episode_summary_val = self.per_episode_summary.eval({
@@ -199,9 +208,16 @@ def add_arguments(parser):
     parser.add_argument('--action-entropy-coeff', type=float, default=0.01)
     parser.add_argument('--value-objective-coeff', type=float, default=0.1)
     parser.add_argument('--reward-gamma', type=float, default=0.99)
-    parser.add_argument('--td-lambda', type=float, default=1.)
+
+    parser.add_argument('--return-eval', choices=['td', 'mc', 'n-step', 'lambda'], default='td')
+    parser.add_argument('--return-n-step', type=int, default=10)
+    parser.add_argument('--return-lambda', type=float, default=0.5)
+
+    parser.add_argument('--advantage-eval', choices=['td', 'mc', 'n-step', 'lambda'], default='td')
+    parser.add_argument('--advantage-n-step', type=int, default=10)
+    parser.add_argument('--advantage-lambda', type=float, default=0.5)
+
     parser.add_argument('--n-update-ticks', type=int, default=20, help='update batch size, 0 for full episodes')
-    parser.add_argument('--n-rnn-dim', type=int, default=256)
     parser.add_argument('--no-grad-clip', action='store_true', help='disable gradient clipping')
     parser.add_argument('--clip-norm', type=float, default=40.)
     parser.add_argument('--summary-interval', type=int, default=16)
