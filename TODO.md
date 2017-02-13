@@ -1,7 +1,7 @@
 # TODO
 
 ## implementation
-- refactor TD(lambda) and eligibility traces
+- eligibility traces
 - change arg parser to partial parse
 - implement continuous action models
 - add tuple type for state (gym has StateTuple)
@@ -13,6 +13,7 @@
 
 ## envs
 - start multiple baxter-gazebo?
+- multi-arm bandit
 - mujoco
 - discrete ob space games (maze)
 - mnist glimpse
@@ -22,7 +23,5 @@
 
 ## experiments
 - gym classic env's with FF and RNN
-- gym atari env's with RNN
 - test on multi-GPU machines
 - FF slower than RNN?
-- try motion blur with RNN

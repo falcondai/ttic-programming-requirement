@@ -3,7 +3,7 @@ from functools import partial
 from Queue import deque
 import numpy as np
 import tensorflow as tf
-import glob, os, time, itertools
+import glob, os, time, itertools, json
 import scipy.signal
 
 # reward processing
@@ -11,7 +11,30 @@ def discount(x, gamma):
     # magic formula for computing gamma-discounted rewards
     return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
 
-# rollout
+# returns
+def n_step_return(rewards, values, gamma, bootstrap_value, n_step=1):
+    ''' computes n-step TD return '''
+    n_step = min(n_step, len(rewards))
+    returns = np.concatenate((values[n_step:], [bootstrap_value] * (n_step + 1)))
+    for dt in xrange(n_step):
+        returns[:-(n_step-dt)] = rewards[n_step-dt-1:] + gamma * returns[:-(n_step-dt)]
+    return returns[:-1]
+
+def td_return(rewards, values, gamma, bootstrap_value):
+    ''' computes TD return, i.e. n-step TD return with n = 1'''
+    return rewards + gamma * np.concatenate((values[1:], [bootstrap_value]))
+
+def mc_return(rewards, gamma, bootstrap_value):
+    ''' computes infinity-step return, i.e. MC return, with bootstraping state value.
+    equivalent to setting n to larger than len(rewards) in n-step return '''
+    return discount(np.concatenate((rewards, [bootstrap_value])), gamma)[:-1]
+
+def lambda_return(rewards, values, gamma, td_lambda, bootstrap_value):
+    td_error = td_return(rewards, values, gamma, bootstrap_value) - values
+    lambda_error = discount(td_error, gamma * td_lambda)
+    return lambda_error + values
+
+# rollout generator
 def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None, env_render=None):
     done = True
     tick = 0
@@ -33,7 +56,7 @@ def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None, 
             h = zero_state
             h0 = h
 
-        obs, actions, rewards, terminals, vhats, info = [], [], [], [], [], {}
+        obs, actions, rewards, vhats, info = [], [], [], [], {}
         # sample some ticks for training
         for t in xrange(n_ticks) if n_ticks != None else itertools.count():
             obs.append(observation)
@@ -44,7 +67,7 @@ def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None, 
             observation, reward, done = env_step(action)
             if env_render != None:
                 env_render()
-                
+
             tick += 1
 
             rewards.append(reward)
@@ -52,8 +75,6 @@ def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None, 
 
             episode_reward += reward
             episode_len += 1
-
-            terminals.append(done)
 
             if done:
                 # stop rollout at the end of the episode
@@ -73,7 +94,7 @@ def partial_rollout(env_reset, env_step, pi_v_h_func, zero_state, n_ticks=None, 
 
         # note the `obs` sequence has one extra final element than others
         # the final observation can be used for bootstraping reward-to-go
-        yield obs + [observation], actions, rewards, terminals, vhats, info
+        yield obs + [observation], np.asarray(actions), np.asarray(rewards), np.asarray(vhats), done, info
 
 def vector_slice(A, B):
     """ Returns values of rows i of A at column B[i]
@@ -106,6 +127,26 @@ def get_optimizer(opt_name, learning_rate, momentum):
     else:
         optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=momentum)
     return optimizer
+
+def restore_save_hyperparameters(checkpoint_path, args):
+    # try to find and restore hyperparameters
+    hp_path = os.path.join(checkpoint_path, 'hyperparameters.json')
+    if os.path.exists(hp_path):
+        print '* found saved hyperparatermeters at %s' % hp_path
+        saved = json.load(open(hp_path))
+        for k, v in saved.iteritems():
+            if not hasattr(args, k):
+                # restore the missing hyperparameters
+                setattr(args, k, v)
+            else:
+                # overwrite the saved hyperparameters
+                saved[k] = v
+    else:
+        print '* no saved hyperparatermeters found'
+
+    json.dump(vars(args), open(hp_path, 'wb'))
+
+    return args
 
 # define an environment as a 4-tuple
 # {

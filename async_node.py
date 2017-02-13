@@ -19,14 +19,15 @@ def build_cluster(n_workers, ps_port):
         })
     return cluster
 
-def run(args, server, env, build_model):
-    summary_dir = os.path.join(args.log_dir, 'worker-%i' % args.task_index)
+def run(task_index, args, server, env, build_model):
+    summary_dir = os.path.join(args.log_dir, 'worker-%i' % task_index)
     checkpoint_dir = os.path.join(args.log_dir, 'checkpoints')
     writer = tf.summary.FileWriter(summary_dir, flush_secs=30)
 
     print '* environment spec:'
     print env.spec
-    trainer = A3C(env.spec, env.reset, env.step, build_model, args.task_index, writer, args)
+
+    trainer = A3C(env.spec, env.reset, env.step, build_model, task_index, writer, args)
 
     # save non-local variables
     variables_to_save = [v for v in tf.global_variables() if not v.name.startswith('local')]
@@ -35,11 +36,11 @@ def run(args, server, env, build_model):
                       keep_checkpoint_every_n_hours=1,
                       max_to_keep=2)
     # save metagraph
-    if args.task_index == 0:
+    if task_index == 0:
         saver.export_meta_graph(os.path.join(checkpoint_dir, 'model.meta'))
 
     sv = tf.train.Supervisor(
-        is_chief=(args.task_index == 0),
+        is_chief=(task_index == 0),
         saver=saver,
         init_op=init_op, # only initialize variables on chief
         ready_op=tf.report_uninitialized_variables(variables_to_save),
@@ -60,7 +61,7 @@ def run(args, server, env, build_model):
             trainer.train(sess)
 
     sv.stop()
-    print '* supervisor %i stopped' % args.task_index
+    print '* supervisor %i stopped' % task_index
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -69,7 +70,7 @@ if __name__ == '__main__':
     parser.add_argument('--task-index', default=0, type=int)
     parser.add_argument('-e', '--env-id', type=str, default='atari.skip.quarter.Pong')
     parser.add_argument('-m', '--model', type=str, default='cnn_gru_pi_v')
-    parser.add_argument('--log-dir', type=str, default='/tmp/pongd')
+    parser.add_argument('--log-dir', type=str, default='/tmp/pong')
     parser.add_argument('--cluster-port', type=int, default=2220)
 
     # add additional A3C arguments
@@ -86,7 +87,7 @@ if __name__ == '__main__':
         server = tf.train.Server(cluster, job_name='worker', task_index=args.task_index, config=config)
         model = importlib.import_module('models.%s' % args.model)
         env = get_env(args.env_id)
-        run(args, server, env, model.build_model)
+        run(args.task_index, args, server, env, model.build_model)
     else:
         # parameter server
         server = tf.train.Server(cluster, job_name='ps', task_index=args.task_index, config=config)
