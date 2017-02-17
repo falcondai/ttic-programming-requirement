@@ -15,6 +15,6 @@ RUN pip install gym[atari]
 WORKDIR /root
 
 # convenient aliases
-RUN alias tk="tmux kill-session"
+RUN alias tk="tmux kill-session" && alias tl="tmux list-session"
 
 RUN ["/bin/bash"]

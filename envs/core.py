@@ -99,5 +99,6 @@ if __name__ == '__main__':
     import sys
 
     env_id = sys.argv[1]
+    render = True if len(sys.argv) > 2 else False
     env = GymEnv(env_id)
-    test_env(env, False)
+    test_env(env, render)

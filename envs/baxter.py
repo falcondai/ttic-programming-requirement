@@ -219,6 +219,11 @@ class BaxterReachEnv(Env):
 def distance(x, y):
     return np.linalg.norm(x - y)
 
+def uniform_s2():
+    ''' sample a point on S^2 (unit sphere) uniformly at random '''
+    xyz = np.random.randn(3)
+    return xyz / np.linalg.norm(xyz)
+
 class BaxterIkEnv(Env):
     def __init__(self, limb='left', dtheta=0.05, step_dt=1./30., goal_threshold=0.1, timestep_limit=300):
         assert limb in ['left', 'right']
@@ -253,27 +258,32 @@ class BaxterIkEnv(Env):
         x = self.arm.joint_angles()
         return np.asarray([x[k] for k in self.joint_names])
 
+    def _get_ob(self):
+        return np.concatenate((self._get_state(), self.goal - self._get_endpoint_position()))
+
     def _get_endpoint_position(self):
         return np.asarray(list(self.arm.endpoint_pose()['position']))
+
+    def _goal_distance(self):
+        return distance(self.goal, self._get_endpoint_position())
 
     def _check_goal(self):
         # j = dict(zip(self.joint_names, self._get_state()))
         # p = self.kin.forward_position_kinematics(j)[:3]
-        return distance(self.goal, self._get_endpoint_position()) < self.goal_threshold
+        return self._goal_distance() < self.goal_threshold
 
     def reset(self, goal_distance=0.2):
         assert self.goal_threshold < goal_distance
         # randomly sample a goal near the initial hand position
         # `goal_distance` limits how far the goal can be from the hand
         r = np.random.rand() * (goal_distance - self.goal_threshold) + self.goal_threshold
-        a, b = np.pi * np.random.rand(), np.pi * 2 * np.random.rand()
-        x, y, z = r * np.cos(a), r * np.sin(a) * np.cos(b), r * np.sin(a) * np.sin(b)
-        self.goal = self._get_endpoint_position() + np.asarray([x, y, z])
+        xyz = uniform_s2()
+        self.goal = self._get_endpoint_position() + r * xyz
 
         self.tick = 0
 
         print self.goal, r, self._check_goal()
-        return np.concatenate((self._get_state(), self.goal), 0)
+        return self._get_ob()
 
     def step(self, action):
         self.tick += 1
@@ -303,11 +313,11 @@ class BaxterIkEnv(Env):
             self.outer_led.set_output(False, 0.)
             self.inner_led.set_output(False, 0.)
 
-        return np.concatenate((self._get_state(), self.goal), 0), -1., done
+        return self._get_ob(), -1., done
 
     def render(self):
         # print self.arm.joint_angles()
-        print self._get_endpoint_position(), distance(self.goal, self._get_endpoint_position()), self._check_goal()
+        print self._get_endpoint_position(), self._goal_distance(), self._check_goal()
 
 def get_baxter_env(env_id):
     parts = env_id.split('.')

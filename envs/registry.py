@@ -1,6 +1,7 @@
 from core import GymEnv
 from atari import get_atari_env
 from doom import get_doom_env
+from planar_robot import get_planar_robot_env
 try:
     from baxter import get_baxter_env
 except:
@@ -31,6 +32,9 @@ def get_env(env_id):
     # Baxter envs
     if parts[0] == baxter_env_prefix:
         return get_baxter_env('.'.join(parts[1:]))
+
+    if parts[0] == 'planar':
+        return get_planar_robot_env('')
 
 if __name__ == '__main__':
     import sys
