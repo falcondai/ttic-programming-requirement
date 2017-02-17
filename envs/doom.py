@@ -3,6 +3,7 @@ from visualize import render_image
 
 import numpy as np
 import time, itertools, os
+from gym import spaces
 
 import vizdoom
 from vizdoom import *
@@ -60,8 +61,8 @@ class DoomEnv(Env):
         c = 1 if self.use_grayscale else 3
         self.spec = {
             'id': 'doom',
-            'observation_shape': (h, w, c),
-            'action_size': len(self.action_map),
+            'observation_space': spaces.Box(low=0., high=255., shape=(h, w, c)),
+            'action_space': spaces.Discrete(len(self.action_map)),
             'timestep_limit': self.game.get_episode_timeout(),
             'extra_variables': self.game.get_available_game_variables(),
         }
