@@ -4,16 +4,20 @@ import tensorflow as tf
 import numpy as np
 import time
 from util import vector_slice, discount, partial_rollout, mask_slice, get_optimizer, mc_return, n_step_return, td_return, lambda_return
+from gym import spaces
 
 def lambda_advantage(rewards, values, gamma, td_lambda, bootstrap_value):
-    td_advantage = td_return(rewards, values, gamma, bootstrap_value) - values
+    td_advantages = td_return(rewards, values, gamma, bootstrap_value) - values
     # these terms telescope into lambda_advantage = G_t^lambda - V(S_t)
-    lambda_advantage = discount(td_advantage, gamma * td_lambda)
-    return lambda_advantage
+    lambda_advantages = discount(td_advantages, gamma * td_lambda)
+    return lambda_advantages
 
 class A3C(object):
     ''' trainer for asynchronous advantage actor critic algorithm '''
     def __init__(self, env_spec, env_reset, env_step, build_model, task_index, writer, args):
+        assert isinstance(env_spec['action_space'], spaces.Discrete)
+        assert not isinstance(env_spec['action_space'], spaces.Tuple)
+
         print '* A3C arguments:'
         vargs = vars(args)
         for k in sorted(vargs.keys()):
@@ -27,7 +31,7 @@ class A3C(object):
         # on parameter server and locally
         with tf.device(tf.train.replica_device_setter(ps_tasks=1, worker_device=worker_device)):
             with tf.variable_scope('global'):
-                build_model(env_spec['observation_shape'], env_spec['action_size'])
+                build_model(env_spec['observation_space'].shape, env_spec['action_space'].n)
                 self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
                 # shared the optimizer
                 if args.shared:
@@ -37,7 +41,7 @@ class A3C(object):
         # local only
         with tf.device(worker_device):
             with tf.variable_scope('local'):
-                self.obs_ph, self.initial_state_ph, action_logits, state_values, _, self.pi_v_h_func, self.v_func, self.zero_state = build_model(env_spec['observation_shape'], env_spec['action_size'])
+                self.obs_ph, self.initial_state_ph, action_logits, state_values, _, self.pi_v_h_func, self.v_func, self.zero_state = build_model(env_spec['observation_space'].shape, env_spec['action_space'].n)
                 lv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
             self.local_step = 0
