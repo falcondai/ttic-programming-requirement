@@ -23,26 +23,6 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_fc_d
             weights_initializer=tf.contrib.layers.xavier_initializer_conv2d(),
             scope='conv%i' % (i+1),
         )
-    # net = tf.contrib.layers.convolution2d(
-    #     inputs=net,
-    #     num_outputs=16,
-    #     kernel_size=(8, 8),
-    #     stride=(4, 4),
-    #     activation_fn=tf.nn.relu,
-    #     biases_initializer=tf.zeros_initializer,
-    #     weights_initializer=tf.contrib.layers.xavier_initializer_conv2d(),
-    #     scope='conv1',
-    # )
-    # net = tf.contrib.layers.convolution2d(
-    #     inputs=net,
-    #     num_outputs=32,
-    #     kernel_size=(4, 4),
-    #     stride=(2, 2),
-    #     activation_fn=tf.nn.relu,
-    #     biases_initializer=tf.zeros_initializer,
-    #     weights_initializer=tf.contrib.layers.xavier_initializer_conv2d(),
-    #     scope='conv2',
-    # )
     net = tf.contrib.layers.flatten(net)
 
     # feedforward
@@ -78,23 +58,5 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_fc_d
     tf.add_to_collection('outputs', action_logits)
     tf.add_to_collection('outputs', state_values)
 
-    # policy function
-    action = tf.multinomial(action_logits, 1)
-    def pi_v_func(obs_val):
-        sess = tf.get_default_session()
-        action_val, state_value_val = sess.run([action, state_values], {
-            obs_ph: [obs_val],
-        })
-        return action_val[0, 0], state_value_val[0]
-
-    # value function
-    def v_func(obs_val):
-        return state_values.eval(feed_dict={
-            obs_ph: [obs_val],
-        })[0]
-
-    zero_state = None
-
-    return obs_ph, None, \
-    action_logits, state_values, None, \
-    pi_v_func, v_func, zero_state
+    return obs_ph, \
+    action_logits, state_values

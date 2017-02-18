@@ -5,6 +5,7 @@ import numpy as np
 import os, time, importlib, argparse, itertools
 from util import partial_rollout
 from envs import get_env
+from agents.adv_ac import A3CAgent
 
 def evaluate(env_spec, env_step, env_reset, env_render, policy, zero_state, n_episodes=None):
     # evaluation
@@ -71,11 +72,12 @@ if __name__ == '__main__':
     # build model
     model = importlib.import_module('models.%s' % args.model)
     with tf.variable_scope('global'):
-        pi, v, z = model.build_model(env.spec['observation_shape'], env.spec['action_size'])[-3:]
+        agent = A3CAgent(env.spec, model.build_model)
     saver = tf.train.Saver()
 
     # eval
     with tf.Session() as sess:
         saver.restore(sess, checkpoint_path)
         print 'restored checkpoint from %s' % checkpoint_path
-        evaluate(env.spec, env.step, env.reset, env_render, pi, z, None if args.n_episodes==0 else args.n_episodes)
+        zero_state = agent.zero_state if agent.spec['use_history'] else None
+        evaluate(env.spec, env.step, env.reset, env_render, agent.act, zero_state, None if args.n_episodes==0 else args.n_episodes)

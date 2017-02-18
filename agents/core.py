@@ -1,3 +1,5 @@
+import argparse
+
 class Agent(object):
     def __init__(self, env_spec):
         self.spec = {
@@ -21,8 +23,17 @@ class RandomAgent(Agent):
     def act(self, ob=None, history=None):
         return self.env_spec['action_space'].sample()
 
-def TrainableAgent(Agent):
-    def update(self, rollout):
+class Trainer(object):
+    @staticmethod
+    def parser():
+        return argparse.ArgumentParser()
+
+    def __init__(self, env, build_model, args):
+        ''' init with environment and arguments parsed by parser '''
+        raise NotImplementedError
+
+    def train(self, sess):
+        ''' consume a (partial) rollout and update model '''
         raise NotImplementedError
 
 

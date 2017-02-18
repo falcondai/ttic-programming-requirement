@@ -3,7 +3,7 @@ import tensorflow as tf
 import argparse, os, importlib
 
 from envs import get_env
-from a3c import A3C, add_arguments
+from agents.adv_ac import A3CTrainer
 
 class FastSaver(tf.train.Saver):
     # HACK disable saving metagraphs
@@ -19,15 +19,15 @@ def build_cluster(n_workers, ps_port):
         })
     return cluster
 
-def run(task_index, args, server, env, build_model):
-    summary_dir = os.path.join(args.log_dir, 'worker-%i' % task_index)
-    checkpoint_dir = os.path.join(args.log_dir, 'checkpoints')
+def run(task_index, log_dir, trainer_args, server, env, build_model):
+    summary_dir = os.path.join(log_dir, 'worker-%i' % task_index)
+    checkpoint_dir = os.path.join(log_dir, 'checkpoints')
     writer = tf.summary.FileWriter(summary_dir, flush_secs=30)
 
     print '* environment spec:'
     print env.spec
 
-    trainer = A3C(env.spec, env.reset, env.step, build_model, task_index, writer, args)
+    trainer = A3CTrainer(env, build_model, task_index, writer, trainer_args)
 
     # save non-local variables
     variables_to_save = [v for v in tf.global_variables() if not v.name.startswith('local')]
@@ -73,10 +73,7 @@ if __name__ == '__main__':
     parser.add_argument('--log-dir', type=str, default='/tmp/pong')
     parser.add_argument('--cluster-port', type=int, default=2220)
 
-    # add additional A3C arguments
-    add_arguments(parser)
-
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
 
     cluster = build_cluster(args.n_workers, args.cluster_port)
     config = tf.ConfigProto(gpu_options={
@@ -84,10 +81,14 @@ if __name__ == '__main__':
         }, intra_op_parallelism_threads=2)
     if args.job == 'worker':
         # worker
+        # additional A3C arguments
+        a3c_parser = A3CTrainer.parser()
+        a3c_args = a3c_parser.parse_args(extra)
+
         server = tf.train.Server(cluster, job_name='worker', task_index=args.task_index, config=config)
         model = importlib.import_module('models.%s' % args.model)
         env = get_env(args.env_id)
-        run(args.task_index, args, server, env, model.build_model)
+        run(args.task_index, args.log_dir, a3c_args, server, env, model.build_model)
     else:
         # parameter server
         server = tf.train.Server(cluster, job_name='ps', task_index=args.task_index, config=config)

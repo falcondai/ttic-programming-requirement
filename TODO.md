@@ -24,5 +24,4 @@
 - gym classic env's with FF and RNN
 - gym atari env's with RNN
 - test on multi-GPU machines
-- FF slower than RNN?
 - try motion blur with RNN
