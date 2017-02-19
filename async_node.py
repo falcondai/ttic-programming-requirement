@@ -3,7 +3,7 @@ import tensorflow as tf
 import argparse, os, importlib
 
 from envs import get_env
-from agents.adv_ac import A3CTrainer
+from agents.adv_ac import StatefulActorCriticAgent, A3CTrainer
 
 class FastSaver(tf.train.Saver):
     # HACK disable saving metagraphs
@@ -27,7 +27,8 @@ def run(task_index, log_dir, trainer_args, server, env, build_model):
     print '* environment spec:'
     print env.spec
 
-    trainer = A3CTrainer(env, build_model, task_index, writer, trainer_args)
+    trainer = A3CTrainer(env, build_model, StatefulActorCriticAgent, task_index, writer, trainer_args)
+    trainer.setup()
 
     # save non-local variables
     variables_to_save = [v for v in tf.global_variables() if not v.name.startswith('local')]

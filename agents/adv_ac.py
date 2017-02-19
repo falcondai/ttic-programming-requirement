@@ -4,7 +4,7 @@ import tensorflow as tf
 import numpy as np
 import time, argparse, itertools
 from util import vector_slice, discount, mask_slice, get_optimizer, mc_return, n_step_return, td_return, lambda_return
-from core import Agent, Trainer
+from core import Agent, StatefulAgent, Trainer
 from gym import spaces
 
 def lambda_advantage(rewards, values, gamma, td_lambda, bootstrap_value):
@@ -13,121 +13,87 @@ def lambda_advantage(rewards, values, gamma, td_lambda, bootstrap_value):
     lambda_advantages = discount(td_advantages, gamma * td_lambda)
     return lambda_advantages
 
+class StatefulActorCriticAgent(StatefulAgent):
+    def __init__(self, env_spec, build_model):
+        assert isinstance(env_spec['action_space'], spaces.Discrete)
+
+        tf_vars = build_model(env_spec['observation_space'].shape, env_spec['action_space'].n)
+        assert len(tf_vars) == 6
+
+        self.obs_ph, self.initial_state_ph, self.action_logits, self.state_values, self.final_state, self.zero_state = tf_vars
+        self.actions = tf.squeeze(tf.multinomial(self.action_logits, 1), 1)
+
+        self.spec = {
+            'deterministic': False,
+        }
+        self._history_state = self.zero_state
+
+    def pi_v(self, ob):
+        sess = tf.get_default_session()
+        action_val, state_value_val, next_history_state_val = sess.run([self.actions, self.state_values, self.final_state], {
+            self.obs_ph: [ob],
+            self.initial_state_ph: self._history_state,
+        })
+        self._history_state = next_history_state_val
+        return action_val[0], state_value_val[0]
+
+    def state_value(self, ob):
+        return self.state_values.eval(feed_dict={
+            self.obs_ph: [ob],
+            self.initial_state_ph: self._history_state,
+        })[0]
+
+    def act(self, ob):
+        sess = tf.get_default_session()
+        action_val, next_history_state_val = sess.run([self.actions, self.final_state], {
+            self.obs_ph: [ob],
+            self.initial_state_ph: self._history_state,
+        })
+        self._history_state = next_history_state_val
+        return action_val[0]
+
+    def initial_state(self):
+        return self.zero_state
+
+    def history_state(self):
+        return self._history_state
+
+    def reset(self, history=None):
+        if history:
+            self._history_state = history
+        else:
+            self._history_state = self.zero_state
+
 class ActorCriticAgent(Agent):
     def __init__(self, env_spec, build_model):
         assert isinstance(env_spec['action_space'], spaces.Discrete)
 
         tf_vars = build_model(env_spec['observation_space'].shape, env_spec['action_space'].n)
+        assert len(tf_vars) == 3
 
-        assert len(tf_vars) == 6 or len(tf_vars) == 3
-        self.use_history = len(tf_vars) == 6
-
-        if self.use_history:
-            self.obs_ph, self.initial_state_ph, self.action_logits, self.state_values, self.final_state, self.zero_state = tf_vars
-            self.actions = tf.multinomial(self.action_logits, 1)
-
-            def pi_v_h_func(ob, history):
-                sess = tf.get_default_session()
-                action_val, state_value_val, next_rnn_state_val = sess.run([self.actions, self.state_values, self.final_state], {
-                    self.obs_ph: [ob],
-                    self.initial_state_ph: history,
-                })
-                return action_val[0, 0], state_value_val[0], next_rnn_state_val
-            self.act = pi_v_h_func
-
-            def v_func(ob, history):
-                return self.state_values.eval(feed_dict={
-                    self.obs_ph: [ob],
-                    self.initial_state_ph: history,
-                })[0]
-            self.value = v_func
-        else:
-            self.obs_ph, self.action_logits, self.state_values = tf_vars
-            self.actions = tf.multinomial(self.action_logits, 1)
-
-            def pi_v_func(ob):
-                sess = tf.get_default_session()
-                action_val, state_value_val = sess.run([self.actions, self.state_values], {
-                    self.obs_ph: [ob],
-                })
-                return action_val[0, 0], state_value_val[0]
-            self.act = pi_v_func
-
-            def v_func(ob):
-                return self.state_values.eval(feed_dict={
-                    self.obs_ph: [ob],
-                })[0]
-            self.value = v_func
+        self.obs_ph, self.action_logits, self.state_values = tf_vars
+        self.actions = tf.squeeze(tf.multinomial(self.action_logits, 1), 1)
 
         self.spec = {
             'deterministic': False,
-            'use_history': self.use_history,
         }
 
+    def pi_v(self, ob):
+        sess = tf.get_default_session()
+        action_val, state_value_val = sess.run([self.actions, self.state_values], {
+            self.obs_ph: [ob],
+        })
+        return action_val[0], state_value_val[0]
 
-def partial_rollout(env_reset, env_step, act, use_history, zero_state=None, n_ticks=None):
-    if use_history:
-        assert isinstance(zero_state, np.ndarray)
+    def state_value(self, ob):
+        return self.state_values.eval(feed_dict={
+            self.obs_ph: [ob],
+        })[0]
 
-    done = True
-    tick = 0
-    while True:
-        rollout_start = time.time()
-        # on-policy rollout
-        if done:
-            # reset episode stats
-            episode_len = 0
-            episode_reward = 0.
-
-            # reset the env
-            observation = env_reset()
-
-            # initial rnn state
-            if use_history:
-                h = zero_state
-                h0 = h
-
-        obs, actions, rewards, vhats, info = [], [], [], [], {}
-        # sample some ticks for training
-        for t in xrange(n_ticks) if n_ticks != None else itertools.count():
-            obs.append(observation)
-            # sample action according to policy
-            if use_history:
-                action, v, h = act(observation, h)
-            else:
-                action, v = act(observation)
-            actions.append(action)
-
-            observation, reward, done = env_step(action)
-
-            tick += 1
-
-            rewards.append(reward)
-            vhats.append(v)
-
-            episode_reward += reward
-            episode_len += 1
-
-            if done:
-                # stop rollout at the end of the episode
-                break
-
-        # yield partial rollout
-        info['rollout_dt'] = time.time() - rollout_start
-        info['tick'] = tick
-        if done:
-            # report episode stats
-            info['episode_len'] = episode_len
-            info['episode_reward'] = episode_reward
-
-        if use_history:
-            info['initial_state'] = h0
-            info['final_state'] = h
-            h0 = h
-
-        # note the `obs` sequence has one extra final element than others
-        # the final observation can be used for bootstraping reward-to-go
-        yield obs + [observation], np.asarray(actions), np.asarray(rewards), np.asarray(vhats), done, info
+    def act(self, ob):
+        return self.actions.eval(feed_dict={
+            self.obs_ph: [ob],
+        })[0]
 
 class A3CTrainer(Trainer):
     ''' trainer for asynchronous advantage actor critic algorithm '''
@@ -158,12 +124,13 @@ class A3CTrainer(Trainer):
 
         return parser
 
-    def __init__(self, env, build_model, task_index, writer, args):
+    def __init__(self, env, build_model, agent_class, task_index, writer, args):
         print '* A3C arguments:'
         vargs = vars(args)
         for k in sorted(vargs.keys()):
             print k, vargs[k]
 
+        self.env = env
         self.task_index = task_index
         self.is_chief = task_index == 0
 
@@ -172,18 +139,18 @@ class A3CTrainer(Trainer):
         # on parameter server and locally
         with tf.device(tf.train.replica_device_setter(ps_tasks=1, worker_device=worker_device)):
             with tf.variable_scope('global'):
-                build_model(env.spec['observation_space'].shape, env.spec['action_space'].n)
+                agent_class(env.spec, build_model)
+                global_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
                 self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
                 # shared the optimizer
                 if args.shared:
                     optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
-                global_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
         # local only
         with tf.device(worker_device):
             with tf.variable_scope('local'):
-                self.agent = ActorCriticAgent(env.spec, build_model)
-                self.use_history = self.agent.spec['use_history']
+                self.agent = agent_class(env.spec, build_model)
+                self.use_history = isinstance(self.agent, StatefulActorCriticAgent)
                 local_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
             self.local_step = 0
@@ -261,10 +228,11 @@ class A3CTrainer(Trainer):
 
             self.summary_interval = args.summary_interval
             if self.is_chief:
+                print '* gradients'
                 grad_summaries = []
                 for g, v in zip(normed_grads, global_variables):
                     grad_summaries.append(tf.summary.histogram('gradients/%s' % v.name, g))
-                    print 'gradients/%s' % v.name
+                    print '%s -> %s' % (g.name, v.name)
 
                 self.per_step_summary = tf.summary.merge(grad_summaries + [
                     tf.summary.scalar('model/objective', self.objective * per_batch_len),
@@ -278,12 +246,8 @@ class A3CTrainer(Trainer):
                     tf.summary.scalar('chief/ticks_per_second', self.ticks_per_second_ph),
                 ])
 
-            n_update_ticks = None if args.n_update_ticks == 0 else args.n_update_ticks
+            self.n_update_ticks = None if args.n_update_ticks == 0 else args.n_update_ticks
 
-            if self.use_history:
-                self.rollout_generator = partial_rollout(env.reset, env.step, self.agent.act, use_history=True, zero_state=self.agent.zero_state, n_ticks=n_update_ticks)
-            else:
-                self.rollout_generator = partial_rollout(env.reset, env.step, self.agent.act, use_history=False, n_ticks=n_update_ticks)
             self.step_start_at = None
 
             # process returns and advantages
@@ -305,6 +269,67 @@ class A3CTrainer(Trainer):
             else:
                 self.process_advantages = lambda rewards, values, bootstrap_value: lambda_advantage(rewards, values, self.reward_gamma, self.advantage_lambda, bootstrap_value)
 
+    def partial_rollout(self):
+        done = True
+        tick = 0
+        while True:
+            rollout_start = time.time()
+            # on-policy rollout
+            if done:
+                # reset episode stats
+                episode_len = 0
+                episode_reward = 0.
+
+                # reset the env
+                observation = self.env.reset()
+
+                # initial rnn state
+                if self.use_history:
+                    self.agent.reset()
+                    h0 = self.agent.history_state()
+
+            obs, actions, rewards, vhats, info = [], [], [], [], {}
+            # sample some ticks for training
+            for t in xrange(self.n_update_ticks) if self.n_update_ticks != None else itertools.count():
+                obs.append(observation)
+                # sample action according to policy
+                action, vhat = self.agent.pi_v(observation)
+                actions.append(action)
+
+                observation, reward, done = self.env.step(action)
+
+                tick += 1
+
+                rewards.append(reward)
+                vhats.append(vhat)
+
+                episode_reward += reward
+                episode_len += 1
+
+                if done:
+                    # stop rollout at the end of the episode
+                    break
+
+            # yield partial rollout
+            info['rollout_dt'] = time.time() - rollout_start
+            info['tick'] = tick
+            if done:
+                # report episode stats
+                info['episode_len'] = episode_len
+                info['episode_reward'] = episode_reward
+
+            if self.use_history:
+                info['initial_state'] = h0
+                h0 = self.agent.history_state()
+
+            # note the `obs` sequence has one extra final element than others
+            # the final observation can be used for bootstraping reward-to-go
+            yield np.asarray(obs + [observation]), np.asarray(actions), np.asarray(rewards), np.asarray(vhats), done, info
+
+    def setup(self):
+        self.rollout_generator = self.partial_rollout()
+        if self.use_history:
+            self.agent.reset()
 
     def train(self, sess):
         if self.step_start_at != None:
@@ -321,9 +346,7 @@ class A3CTrainer(Trainer):
         obs, actions, rewards, vhats, done, info = ro
 
         # bootstrap returns with state value estimate
-        bootstrap_value = 0.
-        if not done:
-            bootstrap_value = self.agent.value(obs[-1], info['final_state']) if self.use_history else self.agent.value(obs[-1])
+        bootstrap_value = 0. if done else self.agent.state_value(obs[-1])
 
         returns = self.process_returns(rewards, vhats, bootstrap_value)
         advantages = self.process_advantages(rewards, vhats, bootstrap_value)
