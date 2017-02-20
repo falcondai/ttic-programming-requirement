@@ -3,19 +3,32 @@
 import tensorflow as tf
 import numpy as np
 import os, time, importlib, argparse, itertools
-from util import partial_rollout
 from envs import get_env
-from agents.adv_ac import A3CAgent
+from agents import StatefulAgent
+from agents.adv_ac import ActorCriticAgent, StatefulActorCriticAgent
 
-def evaluate(env_spec, env_step, env_reset, env_render, policy, zero_state, n_episodes=None):
+def evaluate(env_spec, env_step, env_reset, env_render, agent, n_episodes=None):
     # evaluation
     episode_rewards = []
     episode_lengths = []
 
-    ro_gen = partial_rollout(env_reset, env_step, policy, zero_state, None, env_render)
+    if isinstance(agent, StatefulAgent):
+        is_stateful = True
+    # ro_gen = partial_rollout(env_reset, env_step, policy, zero_state, None, env_render)
     for i in xrange(n_episodes) if n_episodes else itertools.count():
-        ro = ro_gen.next()
-        rewards = ro[2]
+        ob = env_reset()
+        if env_render != None:
+            env_render()
+        done = False
+        if is_stateful:
+            agent.reset()
+        rewards = []
+        while not done:
+            action = agent.act(ob)
+            ob, reward, done = env_step(action)
+            rewards.append(reward)
+            if env_render != None:
+                env_render()
         episode_rewards.append(np.sum(rewards))
         episode_lengths.append(len(rewards))
         print 'episode', i, 'reward', episode_rewards[-1], 'length', episode_lengths[-1]
@@ -72,12 +85,11 @@ if __name__ == '__main__':
     # build model
     model = importlib.import_module('models.%s' % args.model)
     with tf.variable_scope('global'):
-        agent = A3CAgent(env.spec, model.build_model)
+        agent = StatefulActorCriticAgent(env.spec, model.build_model)
     saver = tf.train.Saver()
 
     # eval
     with tf.Session() as sess:
         saver.restore(sess, checkpoint_path)
         print 'restored checkpoint from %s' % checkpoint_path
-        zero_state = agent.zero_state if agent.spec['use_history'] else None
-        evaluate(env.spec, env.step, env.reset, env_render, agent.act, zero_state, None if args.n_episodes==0 else args.n_episodes)
+        evaluate(env.spec, env.step, env.reset, env_render, agent, None if args.n_episodes==0 else args.n_episodes)

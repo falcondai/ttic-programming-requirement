@@ -3,6 +3,7 @@
 import tensorflow as tf
 import numpy as np
 import time, argparse, itertools
+from functools import partial
 from util import vector_slice, discount, mask_slice, get_optimizer, mc_return, n_step_return, td_return, lambda_return
 from core import Agent, StatefulAgent, Trainer
 from gym import spaces
@@ -124,7 +125,7 @@ class A3CTrainer(Trainer):
 
         return parser
 
-    def __init__(self, env, build_model, agent_class, task_index, writer, args):
+    def __init__(self, env, build_agent, task_index, writer, args):
         print '* A3C arguments:'
         vargs = vars(args)
         for k in sorted(vargs.keys()):
@@ -137,9 +138,10 @@ class A3CTrainer(Trainer):
         # build compute graphs
         worker_device = '/job:worker/task:{}'.format(task_index)
         # on parameter server and locally
+        # TODO clone the variables from local
         with tf.device(tf.train.replica_device_setter(ps_tasks=1, worker_device=worker_device)):
             with tf.variable_scope('global'):
-                agent_class(env.spec, build_model)
+                build_agent(env.spec)
                 global_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
                 self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
                 # shared the optimizer
@@ -149,7 +151,8 @@ class A3CTrainer(Trainer):
         # local only
         with tf.device(worker_device):
             with tf.variable_scope('local'):
-                self.agent = agent_class(env.spec, build_model)
+                self.agent = build_agent(env.spec)
+                assert isinstance(self.agent, (ActorCriticAgent, StatefulActorCriticAgent))
                 self.use_history = isinstance(self.agent, StatefulActorCriticAgent)
                 local_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
@@ -379,3 +382,27 @@ class A3CTrainer(Trainer):
                 self.episode_len_ph: info['episode_len'],
             })
             self.writer.add_summary(per_episode_summary_val, gt)
+
+def get_adv_ac_agent_builder(agent_id):
+    parts = agent_id.split('.')
+    if parts[0] == 'cnn_gru':
+        from models.pi_v import cnn_gru
+        n_cnn_layers = int(parts[1]) if len(parts) > 1 else 4
+        n_cnn_filters = int(parts[2]) if len(parts) > 2 else 32
+        n_rnn_dim = int(parts[3]) if len(parts) > 3 else 256
+        return partial(StatefulActorCriticAgent, build_model=partial(cnn_gru.build_model, n_cnn_layers=n_cnn_layers, n_cnn_filters=n_cnn_filters, n_rnn_dim=n_rnn_dim))
+    if parts[0] == 'cnn_lstm':
+        from models.pi_v import cnn_lstm
+        n_cnn_layers = int(parts[1]) if len(parts) > 1 else 4
+        n_cnn_filters = int(parts[2]) if len(parts) > 2 else 32
+        n_rnn_dim = int(parts[3]) if len(parts) > 3 else 256
+        return partial(StatefulActorCriticAgent, build_model=partial(cnn_lstm.build_model, n_cnn_layers=n_cnn_layers, n_cnn_filters=n_cnn_filters, n_rnn_dim=n_rnn_dim))
+    if parts[0] == 'deepmind':
+        from models.pi_v import deepmind_cnn_lstm
+        return partial(StatefulActorCriticAgent, build_model=deepmind_cnn_lstm.build_model)
+    if parts[0] == 'ff_fc':
+        # feedforward
+        from models.pi_v import ff_fc
+        n_fc_layers = int(parts[1]) if len(parts) > 1 else 1
+        n_fc_dim = int(parts[2]) if len(parts) > 2 else 32
+        return partial(ActorCriticAgent, build_model=partial(ff_fc.build_model, n_fc_layers=n_fc_layers, n_fc_dim=n_fc_dim))
