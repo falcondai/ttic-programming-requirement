@@ -3,15 +3,19 @@ from visualize import render_image
 from Queue import deque
 import numpy as np
 import cv2
+from gym import spaces
 
 # common utilities
 
 # image state transformers
 class ScaleWrapper(Env):
     def __init__(self, env, scale, interpolation=cv2.INTER_LINEAR, render_fps=30.):
-        assert len(env.spec['observation_shape']) == 3
-        self.is_grayscale = env.spec['observation_shape'][-1] == 1
-        h, w = env.spec['observation_shape'][:2]
+        assert isinstance(env.spec['observation_space'], spaces.Box)
+        assert len(env.spec['observation_space'].shape) == 3
+
+        ob_space = env.spec['observation_space']
+        self.is_grayscale = ob_space.shape[-1] == 1
+        h, w, c = ob_space.shape
         # keeping the aspect ratio
         sw, sh = int(w * scale), int(h * scale)
         self.size = (sw, sh)
@@ -19,7 +23,9 @@ class ScaleWrapper(Env):
         self.env = env
 
         self.spec = dict(env.spec)
-        self.spec['observation_shape'] = (sh, sw, env.spec['observation_shape'][-1])
+        low = np.min(ob_space.low)
+        high = np.max(ob_space.high)
+        self.spec['observation_space'] = spaces.Box(low=low, high=high, shape=(sh, sw, c))
         self.spec['id'] = '%s [%.2f scaled]' % (env.spec['id'], scale)
         self.scale = scale
         self.render_fps = render_fps
@@ -48,12 +54,17 @@ class ScaleWrapper(Env):
 
 class GrayscaleWrapper(Env):
     def __init__(self, env, render_fps=30.):
-        assert len(env.spec['observation_shape']) == 3
+        assert isinstance(env.spec['observation_space'], spaces.Box)
+        assert len(env.spec['observation_space'].shape) == 3
+
         self.env = env
         self.process_ob = lambda ob: np.mean(ob, -1, keepdims=True)
-        shape = self.process_ob(np.zeros(env.spec['observation_shape'])).shape
         self.spec = dict(env.spec)
-        self.spec['observation_shape'] = shape
+        ob_space = env.spec['observation_space']
+        h, w, c = ob_space.shape
+        low = np.min(ob_space.low)
+        high = np.max(ob_space.high)
+        self.spec['observation_space'] = spaces.Box(low=low, high=high, shape=(h, w, 1))
         self.spec['id'] = '%s [grayscale]' % env.spec['id']
         self.render_fps = render_fps
         self.obs = None
@@ -74,20 +85,25 @@ class GrayscaleWrapper(Env):
 
 class StackFrameWrapper(Env):
     def __init__(self, env, stack_frames=4, render_fps=30.):
-        assert len(env.spec['observation_shape']) == 3
-        self.is_grayscale = env.spec['observation_shape'][-1] == 1
+        assert isinstance(env.spec['observation_space'], spaces.Box)
+        assert len(env.spec['observation_space'].shape) == 3
+
+        self.is_grayscale = env.spec['observation_space'].shape[-1] == 1
         self.env = env
-        shape = [stack_frames] + list(env.spec['observation_shape'])
         self.spec = dict(env.spec)
         self.spec['id'] = '%s [%i stacked frames]' % (env.spec['id'], stack_frames)
-        self.spec['observation_shape'] = shape
+        ob_space = env.spec['observation_space']
+        h, w, c = ob_space.shape
+        low = np.min(ob_space.low)
+        high = np.max(ob_space.high)
+        self.spec['observation_space'] = spaces.Box(low=low, high=high, shape=(stack_frames, h, w, c))
         self.stack_frames = stack_frames
         self.render_fps = render_fps
         self.observation_queue = deque(maxlen=self.stack_frames)
 
     def reset(self):
         obs = self.env.reset()
-        self.observation_queue = deque(np.zeros(self.spec['observation_shape'])[:-1], maxlen=self.stack_frames)
+        self.observation_queue = deque(np.zeros(self.spec['observation_space'].shape)[:-1], maxlen=self.stack_frames)
         self.observation_queue.append(obs)
 
         return np.asarray(self.observation_queue)
@@ -105,8 +121,10 @@ class StackFrameWrapper(Env):
 
 class MotionBlurWrapper(Env):
     def __init__(self, env, mix_coeff=0.6, render_fps=30.):
-        assert len(env.spec['observation_shape']) == 3
-        self.is_grayscale = env.spec['observation_shape'][-1] == 1
+        assert isinstance(env.spec['observation_space'], spaces.Box)
+        assert len(env.spec['observation_space'].shape) == 3
+
+        self.is_grayscale = env.spec['observation_space'].shape[-1] == 1
         self.env = env
         self.spec = dict(env.spec)
         self.spec['id'] = '%s [motion blur]' % env.spec['id']
@@ -137,7 +155,7 @@ class KeyMapWrapper(Env):
         self.env = env
         self.spec = dict(env.spec)
         self.spec['id'] = '%s [key mapped]' % env.spec['id']
-        self.spec['action_size'] = len(key_map)
+        self.spec['action_space'] = spaces.Discrete(len(key_map))
         self.key_map = key_map
         self.reset = env.reset
         self.render = env.render

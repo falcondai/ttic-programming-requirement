@@ -3,18 +3,29 @@
 import tensorflow as tf
 import numpy as np
 import os, time, importlib, argparse, itertools
-from util import partial_rollout
 from envs import get_env
+from agents import get_agent_builder, StatefulAgent
 
-def evaluate(env_spec, env_step, env_reset, env_render, policy, zero_state, n_episodes=None):
+def evaluate(env_spec, env_step, env_reset, env_render, agent, n_episodes=None):
     # evaluation
     episode_rewards = []
     episode_lengths = []
 
-    ro_gen = partial_rollout(env_reset, env_step, policy, zero_state, None, env_render)
+    is_stateful = True if isinstance(agent, StatefulAgent) else False
     for i in xrange(n_episodes) if n_episodes else itertools.count():
-        ro = ro_gen.next()
-        rewards = ro[2]
+        ob = env_reset()
+        if env_render != None:
+            env_render()
+        done = False
+        if is_stateful:
+            agent.reset()
+        rewards = []
+        while not done:
+            action = agent.act(ob)
+            ob, reward, done = env_step(action)
+            rewards.append(reward)
+            if env_render != None:
+                env_render()
         episode_rewards.append(np.sum(rewards))
         episode_lengths.append(len(rewards))
         print 'episode', i, 'reward', episode_rewards[-1], 'length', episode_lengths[-1]
@@ -43,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-episodes', type=int, default=0)
     parser.add_argument('--no-render', action='store_true')
     parser.add_argument('-e', '--env-id', default='atari.skip.quarter.Pong')
-    parser.add_argument('-m', '--model', required=True)
+    parser.add_argument('-a', '--agent', required=True)
     parser.add_argument('-u', '--unwrap', type=int, default=0)
 
     args = parser.parse_args()
@@ -69,13 +80,12 @@ if __name__ == '__main__':
     print env.spec
 
     # build model
-    model = importlib.import_module('models.%s' % args.model)
     with tf.variable_scope('global'):
-        pi, v, z = model.build_model(env.spec['observation_shape'], env.spec['action_size'])[-3:]
+        agent = get_agent_builder(args.agent)(env.spec)
     saver = tf.train.Saver()
 
     # eval
     with tf.Session() as sess:
         saver.restore(sess, checkpoint_path)
         print 'restored checkpoint from %s' % checkpoint_path
-        evaluate(env.spec, env.step, env.reset, env_render, pi, z, None if args.n_episodes==0 else args.n_episodes)
+        evaluate(env.spec, env.step, env.reset, env_render, agent, None if args.n_episodes==0 else args.n_episodes)

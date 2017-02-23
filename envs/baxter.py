@@ -26,6 +26,7 @@ from quaternion import Quaternion as Quat
 import cv2
 from cv_bridge import CvBridge
 import numpy as np
+from gym import spaces
 
 def get_ik_joints_linear(initial_position, target_position, n_steps, limb):
     ns = "ExternalTools/%s/PositionKinematicsNode/IKService" % limb
@@ -249,8 +250,8 @@ class BaxterIkEnv(Env):
 
         self.spec = {
             'id': 'baxter-ik-%s' % self.limb,
-            'observation_shape': (n_joints + 3,),
-            'action_size': len(self.action_map),
+            'observation_space': spaces.Box(low=-10., high=10., shape=n_joints + 3),
+            'action_space': spaces.Discrete(len(self.action_map)),
             'timestep_limit': timestep_limit,
         }
 

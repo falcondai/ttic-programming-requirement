@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 
-def build_model(observation_shape, n_actions, batch=None, n_fc_dim=32):
+def build_model(observation_shape, n_actions, batch=None, n_fc_layers=1, n_fc_dim=32):
     assert len(observation_shape) == 1
 
     obs_ph = tf.placeholder('float', [batch] + list(observation_shape), name='observation')
@@ -9,14 +9,15 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_dim=32):
     tf.add_to_collection('inputs', obs_ph)
 
     net = obs_ph
-    net = tf.contrib.layers.fully_connected(
-        inputs=net,
-        num_outputs=n_fc_dim,
-        biases_initializer=tf.zeros_initializer,
-        weights_initializer=tf.contrib.layers.xavier_initializer(),
-        activation_fn=tf.nn.elu,
-        scope='fc1',
-    )
+    for i in xrange(n_fc_layers):
+        net = tf.contrib.layers.fully_connected(
+            inputs=net,
+            num_outputs=n_fc_dim,
+            biases_initializer=tf.zeros_initializer,
+            weights_initializer=tf.contrib.layers.xavier_initializer(),
+            activation_fn=tf.nn.elu,
+            scope='fc%i' % (i + 1),
+        )
 
     # prediction outputs
     action_logits = tf.contrib.layers.fully_connected(
@@ -41,23 +42,5 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_dim=32):
     tf.add_to_collection('outputs', action_logits)
     tf.add_to_collection('outputs', state_values)
 
-    # policy function
-    action = tf.multinomial(action_logits, 1)
-    def pi_v_func(obs_val, history):
-        sess = tf.get_default_session()
-        action_val, state_value_val = sess.run([action, state_values], {
-            obs_ph: [obs_val],
-        })
-        return action_val[0, 0], state_value_val[0], history
-
-    # value function
-    def v_func(obs_val, history):
-        return state_values.eval(feed_dict={
-            obs_ph: [obs_val],
-        })[0]
-
-    zero_state = None
-
-    return obs_ph, None, \
-    action_logits, state_values, None, \
-    pi_v_func, v_func, zero_state
+    return obs_ph, \
+    action_logits, state_values
