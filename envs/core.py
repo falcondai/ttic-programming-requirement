@@ -1,12 +1,14 @@
 import numpy as np
 import time
+from gym import spaces
+from agents.core import RandomAgent
 
 class Env:
     def __init__(self):
         self.spec = {
             'id': '',
-            'observation_shape': [],
-            'action_size': 0,
+            'observation_space': spaces.Box(0., 1., shape=4),
+            'action_space': spaces.Discrete(5),
             'timestep_limit': 1,
         }
 
@@ -28,9 +30,9 @@ class GymEnv(Env):
         self.gym_env = gym.make(env_id)
         self.spec = {
             'id': env_id,
-            'observation_shape': self.gym_env.observation_space.shape,
+            'observation_space': self.gym_env.observation_space,
+            'action_space': self.gym_env.action_space,
             'timestep_limit': self.gym_env.spec.timestep_limit if 'timestep_limit' in dir(self.gym_env.spec) else None,
-            'action_size': self.gym_env.action_space.n,
         }
         self.timestep = 0
 
@@ -63,15 +65,13 @@ def repeat_action_wrapper(step, n_repeat):
     return env_step
 
 def test_env(env, render=True):
+    random_agent = RandomAgent(env.spec)
     t0 = time.time()
     n = 0
     print env.spec
-    n_action = env.spec['action_size']
-    obs = env.reset()
-    done = False
+    done = True
     episode_reward = 0.
     episode_length = 0
-    print 'obs shape', np.shape(obs)
     while True:
         if done:
             obs = env.reset()
@@ -81,7 +81,7 @@ def test_env(env, render=True):
             n += 1
             if render:
                 env.render()
-        action = np.random.randint(n_action)
+        action = random_agent.act()
         obs, reward, done = env.step(action)
         episode_length += 1
         episode_reward += reward

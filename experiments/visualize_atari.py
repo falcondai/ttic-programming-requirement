@@ -82,7 +82,7 @@ if __name__ == '__main__':
     # build model
     model = importlib.import_module('models.%s' % args.model)
     with tf.variable_scope('global'):
-        model_vs = model.build_model(env.spec['observation_shape'], env.spec['action_size'])
+        model_vs = model.build_model(env.spec['observation_space'].shape, env.spec['action_space'].n)
         pi, v, z = model_vs[-3:]
         pi = wrap_policy(*model_vs[:5], n_cnn_layers=args.n_cnn_layers, value_resolution=args.value_resolution)
     saver = tf.train.Saver()

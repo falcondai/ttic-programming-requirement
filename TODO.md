@@ -24,4 +24,3 @@
 ## experiments
 - gym classic env's with FF and RNN
 - test on multi-GPU machines
-- FF slower than RNN?
