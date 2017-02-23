@@ -3,7 +3,7 @@ import tensorflow as tf
 import argparse, os
 
 from envs import get_env
-from agents import get_agent_builder, A3CTrainer
+from agents import get_agent_builder, A3CTrainer, AsyncQLearningTrainer
 
 class FastSaver(tf.train.Saver):
     # HACK disable saving metagraphs
@@ -19,7 +19,7 @@ def build_cluster(n_workers, ps_port):
         })
     return cluster
 
-def run(task_index, log_dir, trainer_args, server, env, build_agent):
+def run(task_index, log_dir, trainer_args, server, env, build_trainer, build_agent):
     summary_dir = os.path.join(log_dir, 'worker-%i' % task_index)
     checkpoint_dir = os.path.join(log_dir, 'checkpoints')
     writer = tf.summary.FileWriter(summary_dir, flush_secs=30)
@@ -27,7 +27,7 @@ def run(task_index, log_dir, trainer_args, server, env, build_agent):
     print '* environment spec:'
     print env.spec
 
-    trainer = A3CTrainer(env, build_agent, task_index, writer, trainer_args)
+    trainer = build_trainer(env, build_agent, task_index, writer, trainer_args)
     trainer.setup()
 
     # save non-local variables
@@ -69,8 +69,9 @@ if __name__ == '__main__':
     parser.add_argument('--job', choices=['ps', 'worker'], default='worker')
     parser.add_argument('--n-workers', default=2, type=int)
     parser.add_argument('--task-index', default=0, type=int)
-    parser.add_argument('-e', '--env-id', type=str, default='atari.skip.quarter.Pong')
-    parser.add_argument('-a', '--agent', type=str, default='adv_ac.cnn_gru')
+    parser.add_argument('-e', '--env-id', default='atari.skip.quarter.Pong')
+    parser.add_argument('-a', '--agent', default='adv_ac.cnn_gru')
+    parser.add_argument('-t', '--trainer', default=None)
     parser.add_argument('--log-dir', type=str, default='/tmp/pong')
     parser.add_argument('--cluster-port', type=int, default=2220)
 
@@ -82,14 +83,22 @@ if __name__ == '__main__':
         }, intra_op_parallelism_threads=2)
     if args.job == 'worker':
         # worker
-        # additional A3C arguments
-        a3c_parser = A3CTrainer.parser()
-        a3c_args = a3c_parser.parse_args(extra)
+        if args.trainer == None:
+            args.trainer = args.agent.split('.')[0]
+
+        if args.trainer == 'adv_ac':
+            trainer_class = A3CTrainer
+        elif args.trainer == 'q':
+            trainer_class = AsyncQLearningTrainer
+
+        # additional trainer arguments
+        trainer_parser = trainer_class.parser()
+        trainer_args = trainer_parser.parse_args(extra)
 
         server = tf.train.Server(cluster, job_name='worker', task_index=args.task_index, config=config)
         build_agent = get_agent_builder(args.agent)
         env = get_env(args.env_id)
-        run(args.task_index, args.log_dir, a3c_args, server, env, build_agent)
+        run(args.task_index, args.log_dir, trainer_args, server, env, trainer_class, build_agent)
     else:
         # parameter server
         server = tf.train.Server(cluster, job_name='ps', task_index=args.task_index, config=config)

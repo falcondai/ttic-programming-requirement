@@ -4,17 +4,14 @@ import tensorflow as tf
 import numpy as np
 import os, time, importlib, argparse, itertools
 from envs import get_env
-from agents import StatefulAgent
-from agents.adv_ac import ActorCriticAgent, StatefulActorCriticAgent
+from agents import get_agent_builder, StatefulAgent
 
 def evaluate(env_spec, env_step, env_reset, env_render, agent, n_episodes=None):
     # evaluation
     episode_rewards = []
     episode_lengths = []
 
-    if isinstance(agent, StatefulAgent):
-        is_stateful = True
-    # ro_gen = partial_rollout(env_reset, env_step, policy, zero_state, None, env_render)
+    is_stateful = True if isinstance(agent, StatefulAgent) else False
     for i in xrange(n_episodes) if n_episodes else itertools.count():
         ob = env_reset()
         if env_render != None:
@@ -57,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-episodes', type=int, default=0)
     parser.add_argument('--no-render', action='store_true')
     parser.add_argument('-e', '--env-id', default='atari.skip.quarter.Pong')
-    parser.add_argument('-m', '--model', required=True)
+    parser.add_argument('-a', '--agent', required=True)
     parser.add_argument('-u', '--unwrap', type=int, default=0)
 
     args = parser.parse_args()
@@ -83,9 +80,8 @@ if __name__ == '__main__':
     print env.spec
 
     # build model
-    model = importlib.import_module('models.%s' % args.model)
     with tf.variable_scope('global'):
-        agent = StatefulActorCriticAgent(env.spec, model.build_model)
+        agent = get_agent_builder(args.agent)(env.spec)
     saver = tf.train.Saver()
 
     # eval
