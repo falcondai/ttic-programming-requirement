@@ -1,6 +1,7 @@
 from core import Env
 import numpy as np
 import itertools
+from gym import spaces
 
 def distance(x, y):
     return np.linalg.norm(x - y)
@@ -14,14 +15,14 @@ class PlanarReach(Env):
         self.dtheta = dtheta
         self.timestep_limit = timestep_limit
         # O(n) discrete actions
-        # self.action_map = np.concatenate((dtheta * np.eye(self.n_joints), -dtheta * np.eye(self.n_joints), np.zeros((1, self.n_joints))))
+        self.action_map = np.concatenate((dtheta * np.eye(self.n_joints), -dtheta * np.eye(self.n_joints), np.zeros((1, self.n_joints))))
         # O(n^2) discrete actions
-        self.action_map = np.asarray(list(itertools.product([-1., 0., 1.], repeat=self.n_joints))) * self.dtheta
+        # self.action_map = np.asarray(list(itertools.product([-1., 0., 1.], repeat=self.n_joints))) * self.dtheta
 
         self.spec = {
-            'id': 'planar-robot',
-            'observation_shape': (3 * self.n_joints + 2 * 2,),
-            'action_size': len(self.action_map),
+            'id': 'planar-robot-%i' % self.n_joints,
+            'observation_space': spaces.Box(low=0, high=0, shape=(3 * self.n_joints + 2 * 2,)),
+            'action_space': spaces.Discrete(len(self.action_map)),
             'timestep_limit': self.timestep_limit,
         }
 
@@ -48,25 +49,23 @@ class PlanarReach(Env):
             self.goal - self._get_endpoint_position(),
             ])
 
-    def reset(self, goal_distance=0.4):
+    def reset(self):
         self.tick = 0
 
         # generate a random goal
         self.positions = np.random.rand(self.n_joints) * 2 * np.pi
-        goal_distance = 0.4
-        # r = np.random.rand() * (goal_distance - 2 * self.goal_threshold) + self.goal_threshold
         if self.n_joints == 1:
             r = np.sum(self.links)
         else:
             r = np.random.rand() * np.sum(self.links)
         theta = np.random.rand() * 2. * np.pi
         x, y = np.cos(theta), np.sin(theta)
-        # self.goal = np.asarray([x, y]) + self._get_endpoint_position()
         self.goal = np.asarray([x, y]) * r
 
         return self._get_ob()
 
     def step(self, action):
+        # TODO implement dynamics with Box2D
         self.tick += 1
         self.positions = np.mod(self.positions + self.action_map[action], 2. * np.pi)
 
@@ -77,7 +76,6 @@ class PlanarReach(Env):
         return self._get_ob(), -self._goal_distance(), done
 
     def render(self):
-        # print self._get_ob(), self._get_endpoint_position(), self._goal_distance(), self._check_goal()
         from gym.envs.classic_control import rendering
         if self.viewer is None:
             self.viewer = rendering.Viewer(320, 320)
@@ -107,8 +105,12 @@ class PlanarReach(Env):
         return self.viewer.render()
 
 def get_planar_robot_env(env_id):
-    return PlanarReach()
+    parts = env_id.split('.')
+    n_joints = int(parts[0]) if len(parts) > 0 else 1
+    return PlanarReach(n_joints=n_joints)
 
 if __name__ == '__main__':
     from core import test_env
-    test_env(PlanarReach())
+    import sys
+    env = get_planar_robot_env(sys.argv[1])
+    test_env(env)

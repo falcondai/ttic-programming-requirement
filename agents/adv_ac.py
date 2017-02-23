@@ -106,7 +106,7 @@ class A3CTrainer(Trainer):
         parser.add_argument('--value-objective-coeff', type=float, default=0.1)
         parser.add_argument('--reward-gamma', type=float, default=0.99)
 
-        parser.add_argument('--return-eval', choices=['td', 'mc', 'n-step', 'lambda'], default='td')
+        parser.add_argument('--return-eval', choices=['td', 'mc', 'n-step', 'lambda'], default='mc')
         parser.add_argument('--return-n-step', type=int, default=10)
         parser.add_argument('--return-lambda', type=float, default=0.5)
 

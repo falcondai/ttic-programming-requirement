@@ -12,6 +12,8 @@ def get_env(env_id):
     '''env_id is a string of the format `prefix.env_name`'''
     # parse
     parts = env_id.split('.')
+    rest = '.'.join(parts[1:])
+
     gym_env_prefix = 'gym'
     atari_env_prefix = 'atari'
     doom_env_prefix = 'doom'
@@ -23,18 +25,18 @@ def get_env(env_id):
 
     # Atari games
     if parts[0] == atari_env_prefix:
-        return get_atari_env('.'.join(parts[1:]))
+        return get_atari_env(rest)
 
     # Doom envs
     if parts[0] == doom_env_prefix:
-        return get_doom_env('.'.join(parts[1:]))
+        return get_doom_env(rest)
 
     # Baxter envs
     if parts[0] == baxter_env_prefix:
-        return get_baxter_env('.'.join(parts[1:]))
+        return get_baxter_env(rest)
 
     if parts[0] == 'planar':
-        return get_planar_robot_env('')
+        return get_planar_robot_env(rest)
 
 if __name__ == '__main__':
     import sys

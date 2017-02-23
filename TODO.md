@@ -2,14 +2,11 @@
 
 ## implementation
 - eligibility traces
-- change arg parser to partial parse
 - implement continuous action models
 - add tuple type for state (gym has StateTuple)
 - human agent (needs to be env-specific, doom -> spectator mode, atari -> WASD, etc)
 - algorithmic envs
 - clean up and integrate the old RL algo impl
-- add agent class (add ob_space/action_space to env.spec)
-- agent registry
 
 ## envs
 - start multiple baxter-gazebo?

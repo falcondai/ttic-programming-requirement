@@ -154,7 +154,7 @@ class AsyncQLearningTrainer(Trainer):
         parser.add_argument('--temperature', type=float, default=1.)
         parser.add_argument('--target-lag', type=int, default=8)
 
-        parser.add_argument('--return-eval', choices=['td', 'mc', 'n-step', 'lambda'], default='td')
+        parser.add_argument('--return-eval', choices=['td', 'mc', 'n-step', 'lambda'], default='mc')
         parser.add_argument('--return-n-step', type=int, default=10)
         parser.add_argument('--return-lambda', type=float, default=0.5)
 
