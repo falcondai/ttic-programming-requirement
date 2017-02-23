@@ -400,6 +400,12 @@ def get_adv_ac_agent_builder(agent_id):
     if parts[0] == 'deepmind':
         from models.pi_v import deepmind_cnn_lstm
         return partial(StatefulActorCriticAgent, build_model=deepmind_cnn_lstm.build_model)
+    if parts[0] == 'ff_cnn':
+        from models.pi_v import ff_cnn
+        n_cnn_layers = int(parts[1]) if len(parts) > 1 else 4
+        n_cnn_filters = int(parts[2]) if len(parts) > 2 else 32
+        n_fc_dim = int(parts[3]) if len(parts) > 3 else 256
+        return partial(ActorCriticAgent, build_model=partial(ff_cnn.build_model, n_cnn_layers=n_cnn_layers, n_cnn_filters=n_cnn_filters, n_fc_dim=n_fc_dim))
     if parts[0] == 'ff_fc':
         # feedforward
         from models.pi_v import ff_fc
