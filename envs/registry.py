@@ -14,25 +14,20 @@ def get_env(env_id):
     parts = env_id.split('.')
     rest = '.'.join(parts[1:])
 
-    gym_env_prefix = 'gym'
-    atari_env_prefix = 'atari'
-    doom_env_prefix = 'doom'
-    baxter_env_prefix = 'baxter'
-
     # envs from OpenAI gym with no wrappers
-    if parts[0] == gym_env_prefix:
+    if parts[0] == 'gym':
         return GymEnv(parts[1])
 
     # Atari games
-    if parts[0] == atari_env_prefix:
+    if parts[0] == 'atari':
         return get_atari_env(rest)
 
     # Doom envs
-    if parts[0] == doom_env_prefix:
+    if parts[0] == 'doom':
         return get_doom_env(rest)
 
     # Baxter envs
-    if parts[0] == baxter_env_prefix:
+    if parts[0] == 'baxter':
         return get_baxter_env(rest)
 
     if parts[0] == 'planar':

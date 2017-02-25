@@ -52,6 +52,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--checkpoint-dir')
     parser.add_argument('--checkpoint-path')
     parser.add_argument('--n-episodes', type=int, default=0)
+    parser.add_argument('--render-fps', type=float, default=60.)
     parser.add_argument('--no-render', action='store_true')
     parser.add_argument('-e', '--env-id', default='atari.skip.quarter.Pong')
     parser.add_argument('-a', '--agent', required=True)
@@ -67,6 +68,7 @@ if __name__ == '__main__':
 
     # init env
     env = get_env(args.env_id)
+    env.render_fps = args.render_fps
     if not args.no_render:
         # HACK unwrap to use base env's render
         _env = env
