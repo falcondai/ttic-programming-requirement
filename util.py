@@ -1,15 +1,13 @@
 from scipy.misc import imresize
-from functools import partial
-from Queue import deque
 import numpy as np
 import tensorflow as tf
 import glob, os, time, itertools, json
 import scipy.signal
 
 # reward processing
-def discount(x, gamma):
+def discount(rewards, gamma):
     # magic formula for computing gamma-discounted rewards
-    return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
+    return scipy.signal.lfilter([1], [1, -gamma], rewards[::-1], axis=0)[::-1]
 
 # returns
 def n_step_return(rewards, values, gamma, bootstrap_value, n_step=1):
@@ -147,140 +145,6 @@ def restore_save_hyperparameters(checkpoint_path, args):
     json.dump(vars(args), open(hp_path, 'wb'))
 
     return args
-
-# define an environment as a 4-tuple
-# {
-#     spec: {
-#         observation_shape,
-#         timestep_limit,
-#         action_size,
-#     },
-#     step: action |-> state, reward, done,
-#     reset: |-> state,
-#     render: |-> ,
-# }
-
-def passthrough(gym_env):
-    '''use gym environment as is'''
-    spec = {
-        'timestep_limit': gym_env.spec.timestep_limit if 'timestep_limit' in dir(gym_env.spec) else 10**6,
-        'action_size': gym_env.action_space.n,
-        'observation_shape': gym_env.observation_space.shape,
-    }
-    step = lambda action: gym_env.step(action)[:3]
-    return spec, step, gym_env.reset, gym_env.render
-
-def scale_image(scale, interpolation, im):
-    return imresize(im, scale, interp=interpolation)
-
-def grayscale_image(im):
-    return im.mean(axis=2, keepdims=True)
-
-def scale_env(env, scale, interpolation):
-    spec, step, reset, render = env
-    spec['observation_shape'] = scale_image(scale, interpolation,
-                                            np.zeros(
-                                                spec['observation_shape']
-                                                )
-                                            ).shape
-    env_reset = lambda : scale_image(scale, interpolation, reset())
-    def env_step(action):
-        im, reward, done = step(action)
-        return grayscale_image(scale_image(scale, interpolation, im)), reward, done
-    return spec, env_step, env_reset, render
-
-def atari_env(env, scale, skip_frames):
-    spec, step, reset, render = env
-    spec['observation_shape'] = grayscale_image(scale_image(scale,
-                                                            'bilinear',
-                                                            np.zeros(
-                                                                (160, 160, 3)
-                                                                ))).shape
-
-    # spec['observation_shape'] = grayscale_image(scale_image(scale,
-    #                                                         'bilinear',
-    #                                                         np.zeros(
-    #                                                             spec['observation_shape']
-    #                                                             ))).shape
-    env_reset = lambda : grayscale_image(scale_image(scale, 'bilinear', reset()[34:34+160, :160]))
-    def env_step(action):
-        acc_reward = 0.
-        for i in xrange(skip_frames):
-            im, reward, done = step(action)
-            im = im[34:34+160, :160]
-            acc_reward += reward
-            if done:
-                break
-        return grayscale_image(scale_image(scale, 'bilinear', im)), acc_reward, done
-    return spec, env_step, env_reset, render
-
-def use_render_state(gym_env, scale, interpolation='bilinear'):
-    '''use gym environment's rendered image as observation variable'''
-    si = partial(scale_image, scale, interpolation)
-    observation_shape = si(gym_env.render('rgb_array')).shape
-    spec = {
-        'timestep_limit': gym_env.spec.timestep_limit,
-        'action_size': gym_env.action_space.n,
-        'observation_shape': observation_shape,
-    }
-
-    def reset():
-        gym_env.reset()
-        return si(gym_env.render('rgb_array'))
-
-    def step(action):
-        obs, reward, done, info = gym_env.step(action)
-        return si(gym_env.render('rgb_array')), reward, done
-
-    return spec, step, reset, gym_env.render
-
-def pad_zeros(obs, n_obs_ticks):
-    return [np.zeros(obs[0].shape)] * (n_obs_ticks - 1) + obs
-
-def duplicate_obs(observations, n_obs_ticks):
-    obs_q = []
-    l = len(observations)
-    for i in xrange(n_obs_ticks):
-        obs_q.append(observations[i:l-n_obs_ticks+i+1])
-    return np.concatenate(obs_q, axis=-1)
-
-def rollout(behavior_policy, env_spec, env_step, env_reset,
-            env_render=None, n_obs_ticks=1):
-    '''rollout based on behavior policy from an environment'''
-    # pad the first observation with zeros
-    obs = env_reset()
-    obs_q = deque(pad_zeros([obs], n_obs_ticks), n_obs_ticks)
-
-    observations, actions, rewards = [], [], []
-    done = False
-    t = 0
-    while not done and t < env_spec['timestep_limit']:
-        policy_input = np.concatenate(obs_q, axis=-1)
-        action_probs = behavior_policy(policy_input)
-        action = np.random.choice(env_spec['action_size'], p=action_probs)
-        obs_q.popleft()
-        observations.append(obs)
-        actions.append(action)
-        obs, reward, done = env_step(action)
-        rewards.append(reward)
-        obs_q.append(obs)
-        if env_render != None:
-            env_render()
-        t += 1
-    return observations, actions, rewards
-
-# policy modifiers
-def to_greedy(policy_prob_func, obs):
-    ps = policy_prob_func(obs)
-    z = np.zeros(ps.shape)
-    z[np.argmax(ps)] = 1.
-    return z
-
-def to_epsilon_greedy(epsilon, policy_prob_func, obs):
-    ps = policy_prob_func(obs)
-    z = np.zeros(ps.shape) + epsilon / len(ps)
-    z[np.argmax(ps)] += 1. - epsilon
-    return z
 
 # tensorflow utility
 def test_restore_vars(sess, checkpoint_path, meta_path):

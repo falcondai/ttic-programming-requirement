@@ -2,4 +2,4 @@
 a tensorflow implementation of policy gradient methods.
 
 ## Author
-Falcon Dai
+Falcon Dai (dai@ttic.edu)

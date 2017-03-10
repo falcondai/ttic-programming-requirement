@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 # async training launch script meant for use on slurm-managed clusters
 # additionally, we can launch a bunch of them at once by
 # - piping the script output to files
