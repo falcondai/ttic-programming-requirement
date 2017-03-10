@@ -7,17 +7,6 @@
 import numpy as np
 from image import render_image
 
-def fold(series, resolution, height, baseline=0.):
-    '''
-    resolution: value per pixel, this is used to convert [float] into [int]
-    height: height of the plot in pixels
-    baseline: where y = 0 in the plot corresponds to in value space
-    '''
-    yi = series - baseline
-    si = np.floor_divide(yi, resolution * height)
-    ypi = np.floor_divide(yi - si * resolution * height, resolution)
-    return np.asarray(si, dtype=np.int32), np.asarray(ypi, dtype=np.int32)
-
 def fold_y(y, resolution, height, baseline=0.):
     '''
     resolution: value per pixel, this is used to convert [float] into [int]
@@ -32,8 +21,8 @@ def fold_y(y, resolution, height, baseline=0.):
 def blend(color1, color2, alpha):
     return np.asarray(color1 * alpha + color2 * (1. - alpha), dtype=np.uint8)
 
-def blend_ratio(x):
-    return (1. - np.exp(- 0.4 * x))
+def blend_ratio(x, k=0.4):
+    return (1. - np.exp(- k * x))
 
 def shade(step, positive_color=np.asarray([255, 0, 0]), negative_color=np.asarray([0, 0, 255]), background_color=np.asarray([255, 255, 255])):
     if step >= 0:

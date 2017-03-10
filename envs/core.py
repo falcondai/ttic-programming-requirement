@@ -67,7 +67,7 @@ def repeat_action_wrapper(step, n_repeat):
 def test_env(env, render=True):
     random_agent = RandomAgent(env.spec)
     t0 = time.time()
-    n = 0
+    n_elapsed_ticks = 0
     print env.spec
     done = True
     episode_reward = 0.
@@ -78,22 +78,22 @@ def test_env(env, render=True):
             print 'reward', episode_reward, 'length', episode_length
             episode_reward = 0.
             episode_length = 0
-            n += 1
+            n_elapsed_ticks += 1
             if render:
                 env.render()
         action = random_agent.act()
         obs, reward, done = env.step(action)
         episode_length += 1
         episode_reward += reward
-        n += 1
+        n_elapsed_ticks += 1
         if render:
             env.render()
         t = time.time()
         # calculate FPS every 5 seconds
         if t - t0 > 5:
-            print '%.2f fps' % (n * 1. / (t - t0))
+            print '%.2f fps' % (n_elapsed_ticks * 1. / (t - t0))
             t0 = t
-            n = 0
+            n_elapsed_ticks = 0
 
 if __name__ == '__main__':
     import sys

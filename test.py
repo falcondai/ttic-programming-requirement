@@ -11,7 +11,7 @@ def evaluate(env_spec, env_step, env_reset, env_render, agent, n_episodes=None):
     episode_rewards = []
     episode_lengths = []
 
-    is_stateful = True if isinstance(agent, StatefulAgent) else False
+    is_stateful = isinstance(agent, StatefulAgent)
     for i in xrange(n_episodes) if n_episodes else itertools.count():
         ob = env_reset()
         if env_render != None:
@@ -30,7 +30,6 @@ def evaluate(env_spec, env_step, env_reset, env_render, agent, n_episodes=None):
         episode_lengths.append(len(rewards))
         print 'episode', i, 'reward', episode_rewards[-1], 'length', episode_lengths[-1]
 
-    # summary
     print '* summary'
     print 'episode lengths:',
     print 'mean', np.mean(episode_lengths), '\t',
@@ -66,28 +65,31 @@ if __name__ == '__main__':
     else:
         checkpoint_path = args.checkpoint_path
 
-    # init env
-    env = get_env(args.env_id)
-    env.render_fps = args.render_fps
-    if not args.no_render:
-        # HACK unwrap to use base env's render
-        _env = env
-        for i in xrange(args.unwrap):
-            _env = _env.env
-        env_render = _env.render
+    if checkpoint_path is None:
+        print '* checkpoint path does not exist'
     else:
-        env_render = None
+        # init env
+        env = get_env(args.env_id)
+        env.render_fps = args.render_fps
+        if not args.no_render:
+            # HACK unwrap to use base env's render
+            _env = env
+            for i in xrange(args.unwrap):
+                _env = _env.env
+            env_render = _env.render
+        else:
+            env_render = None
 
-    print '* environment'
-    print env.spec
+        print '* environment'
+        print env.spec
 
-    # build model
-    with tf.variable_scope('global'):
-        agent = get_agent_builder(args.agent)(env.spec)
-    saver = tf.train.Saver()
+        # build model
+        with tf.variable_scope('global'):
+            agent = get_agent_builder(args.agent)(env.spec)
+        saver = tf.train.Saver()
 
-    # eval
-    with tf.Session() as sess:
-        saver.restore(sess, checkpoint_path)
-        print 'restored checkpoint from %s' % checkpoint_path
-        evaluate(env.spec, env.step, env.reset, env_render, agent, None if args.n_episodes==0 else args.n_episodes)
+        # eval
+        with tf.Session() as sess:
+            saver.restore(sess, checkpoint_path)
+            print 'restored checkpoint from %s' % checkpoint_path
+            evaluate(env.spec, env.step, env.reset, env_render, agent, None if args.n_episodes==0 else args.n_episodes)

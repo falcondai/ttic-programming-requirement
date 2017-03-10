@@ -163,7 +163,7 @@ class KeyMapWrapper(Env):
     def step(self, action):
         return self.env.step(self.key_map[action])
 
-# environment combination
+# TODO environment combination
 
 
 if __name__ == '__main__':

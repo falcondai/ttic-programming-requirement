@@ -8,7 +8,14 @@ from util import vector_slice, discount, mask_slice, get_optimizer, mc_return, n
 from core import Agent, StatefulAgent, Trainer
 from gym import spaces
 
-class StatefulQAgent(StatefulAgent):
+class Q(object):
+    def max_action_value(self, ob):
+        raise NotImplementedError
+
+    def pi_q(self, ob):
+        raise NotImplementedError
+
+class StatefulQAgent(Q, StatefulAgent):
     def __init__(self, env_spec, build_model, behavior_policy='softmax', epsilon=0.01, temperature=1.):
         assert isinstance(env_spec['action_space'], spaces.Discrete)
         assert behavior_policy in ['epsilon', 'greedy', 'softmax']
@@ -72,20 +79,7 @@ class StatefulQAgent(StatefulAgent):
         self._history_state = next_rnn_state_val
         return action_val[0]
 
-    def initial_state(self):
-        return self.zero_state
-
-    def history_state(self):
-        return self._history_state
-
-    def reset(self, history=None):
-        if history:
-            self._history_state = history
-        else:
-            self._history_state = self.zero_state
-
-
-class QAgent(Agent):
+class QAgent(Q, Agent):
     def __init__(self, env_spec, build_model, behavior_policy='softmax', epsilon=0.01, temperature=1.):
         assert isinstance(env_spec['action_space'], spaces.Discrete)
         assert behavior_policy in ['epsilon', 'greedy', 'softmax']
@@ -182,9 +176,9 @@ class AsyncQLearningTrainer(Trainer):
         # build compute graphs
         worker_device = '/job:worker/task:{}'.format(task_index)
         # on parameter server and locally
-        # TODO clone the variables from local
         with tf.device(tf.train.replica_device_setter(ps_tasks=1, worker_device=worker_device)):
             with tf.variable_scope('global'):
+                # copy of the model for parameter server
                 build_agent(env.spec)
                 global_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
                 self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer())
@@ -195,9 +189,11 @@ class AsyncQLearningTrainer(Trainer):
         # local only
         with tf.device(worker_device):
             with tf.variable_scope('local'):
+                # the target model (computes regression target)
                 with tf.variable_scope('target'):
                     self.target_agent = build_agent(env.spec)
                     target_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+                # the current model to be updated
                 with tf.variable_scope('current'):
                     self.agent = build_agent(env.spec, behavior_policy=args.behavior_policy, temperature=args.temperature, epsilon=args.epsilon)
                     local_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
@@ -287,7 +283,7 @@ class AsyncQLearningTrainer(Trainer):
 
             self.step_start_at = None
 
-            # process returns and advantages
+            # process returns
             if args.return_eval == 'td':
                 self.process_returns = lambda rewards, values, bootstrap_value: td_return(rewards, values, self.reward_gamma, bootstrap_value)
             elif args.return_eval == 'mc':

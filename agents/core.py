@@ -17,23 +17,20 @@ class StatefulAgent(Agent):
         self.spec = {
             'deterministic': True,
         }
-        raise NotImplementedError
-
-    def act(self, ob):
-        # use self.history_state() to return an action
+        self._history_state = self.zero_state = 0.
         raise NotImplementedError
 
     def initial_state(self):
-        # this should return the zero state
-        raise NotImplementedError
+        return self.zero_state
 
     def history_state(self):
-        # this should return the current state
-        raise NotImplementedError
+        return self._history_state
 
     def reset(self, history=None):
-        # this should reset the internal history state to `history` or self.initial_state() by default
-        raise NotImplementedError
+        if history:
+            self._history_state = history
+        else:
+            self._history_state = self.zero_state
 
 class RandomAgent(Agent):
     def __init__(self, env_spec):

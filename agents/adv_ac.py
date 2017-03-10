@@ -14,7 +14,14 @@ def lambda_advantage(rewards, values, gamma, td_lambda, bootstrap_value):
     lambda_advantages = discount(td_advantages, gamma * td_lambda)
     return lambda_advantages
 
-class StatefulActorCriticAgent(StatefulAgent):
+class ActorCritic(object):
+    def pi_v(self, ob):
+        raise NotImplementedError
+
+    def state_value(self, ob):
+        raise NotImplementedError
+
+class StatefulActorCriticAgent(ActorCritic, StatefulAgent):
     def __init__(self, env_spec, build_model):
         assert isinstance(env_spec['action_space'], spaces.Discrete)
 
@@ -53,19 +60,7 @@ class StatefulActorCriticAgent(StatefulAgent):
         self._history_state = next_history_state_val
         return action_val[0]
 
-    def initial_state(self):
-        return self.zero_state
-
-    def history_state(self):
-        return self._history_state
-
-    def reset(self, history=None):
-        if history:
-            self._history_state = history
-        else:
-            self._history_state = self.zero_state
-
-class ActorCriticAgent(Agent):
+class ActorCriticAgent(ActorCritic, Agent):
     def __init__(self, env_spec, build_model):
         assert isinstance(env_spec['action_space'], spaces.Discrete)
 
@@ -138,9 +133,9 @@ class A3CTrainer(Trainer):
         # build compute graphs
         worker_device = '/job:worker/task:{}'.format(task_index)
         # on parameter server and locally
-        # TODO clone the variables from local
         with tf.device(tf.train.replica_device_setter(ps_tasks=1, worker_device=worker_device)):
             with tf.variable_scope('global'):
+                # clone of the model for parameter server
                 build_agent(env.spec)
                 global_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
                 self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer())
@@ -161,7 +156,7 @@ class A3CTrainer(Trainer):
             self.sync_op = tf.group(*[v1.assign(v2) for v1, v2 in zip(local_variables, global_variables)])
 
             # define objectives
-            # inputs
+            # input variables
             self.actions_taken_ph = tf.placeholder('int32')
             self.target_value_ph = tf.placeholder('float')
             self.advantage_ph = tf.placeholder('float')
@@ -253,7 +248,7 @@ class A3CTrainer(Trainer):
 
             self.step_start_at = None
 
-            # process returns and advantages
+            # process returns
             if args.return_eval == 'td':
                 self.process_returns = lambda rewards, values, bootstrap_value: td_return(rewards, values, self.reward_gamma, bootstrap_value)
             elif args.return_eval == 'mc':
@@ -263,6 +258,7 @@ class A3CTrainer(Trainer):
             else:
                 self.process_returns = lambda rewards, values, bootstrap_value: lambda_return(rewards, values, self.reward_gamma, self.return_lambda, bootstrap_value)
 
+            # process advantages
             if args.advantage_eval == 'td':
                 self.process_advantages = lambda rewards, values, bootstrap_value: td_return(rewards, values, self.reward_gamma, bootstrap_value) - values
             elif args.advantage_eval == 'mc':
@@ -367,10 +363,10 @@ class A3CTrainer(Trainer):
             feed[self.agent.initial_state_ph] = info['initial_state']
 
         if self.is_chief and self.local_step % self.summary_interval == 0:
-            per_episode_summary_val, _, gt = sess.run([self.per_step_summary, self.update_op, self.global_tick], feed_dict=feed)
-            self.writer.add_summary(per_episode_summary_val, gt)
+            per_episode_summary_val, _, global_tick_val = sess.run([self.per_step_summary, self.update_op, self.global_tick], feed_dict=feed)
+            self.writer.add_summary(per_episode_summary_val, global_tick_val)
         else:
-            _, gt = sess.run([self.update_op, self.global_tick], feed_dict=feed)
+            _, global_tick_val = sess.run([self.update_op, self.global_tick], feed_dict=feed)
 
         self.local_step += 1
 
@@ -381,7 +377,7 @@ class A3CTrainer(Trainer):
                 self.episode_reward_ph: info['episode_reward'],
                 self.episode_len_ph: info['episode_len'],
             })
-            self.writer.add_summary(per_episode_summary_val, gt)
+            self.writer.add_summary(per_episode_summary_val, global_tick_val)
 
 def get_adv_ac_agent_builder(agent_id):
     parts = agent_id.split('.')

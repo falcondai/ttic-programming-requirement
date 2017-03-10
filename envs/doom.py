@@ -88,8 +88,6 @@ class DoomEnv(Env):
             self.last_ob = np.expand_dims(ob, -1)
         else:
             self.last_ob = ob
-        # if self.use_depth:
-        #     self.last_ = np.expand_dims(ob, -1)
 
     def render(self):
         # TODO show other buffers
