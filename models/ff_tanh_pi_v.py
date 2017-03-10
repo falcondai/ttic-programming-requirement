@@ -12,7 +12,7 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_dim=64):
     net = tf.contrib.layers.fully_connected(
         inputs=net,
         num_outputs=n_fc_dim,
-        biases_initializer=tf.zeros_initializer,
+        biases_initializer=tf.zeros_initializer(),
         weights_initializer=tf.contrib.layers.xavier_initializer(),
         activation_fn=tf.nn.tanh,
         scope='fc1',
@@ -21,7 +21,7 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_dim=64):
     # net = tf.contrib.layers.fully_connected(
     #     inputs=net,
     #     num_outputs=n_fc_dim / 2,
-    #     biases_initializer=tf.zeros_initializer,
+    #     biases_initializer=tf.zeros_initializer(),
     #     weights_initializer=tf.contrib.layers.xavier_initializer(),
     #     activation_fn=tf.nn.tanh,
     #     scope='fc2',
@@ -31,7 +31,7 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_dim=64):
     action_logits = tf.contrib.layers.fully_connected(
         inputs=net,
         num_outputs=n_actions,
-        biases_initializer=tf.zeros_initializer,
+        biases_initializer=tf.zeros_initializer(),
         weights_initializer=tf.contrib.layers.xavier_initializer(),
         activation_fn=None,
         scope='action_fc1',
@@ -40,7 +40,7 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_dim=64):
     state_values = tf.contrib.layers.fully_connected(
         inputs=net,
         num_outputs=1,
-        biases_initializer=tf.zeros_initializer,
+        biases_initializer=tf.zeros_initializer(),
         weights_initializer=tf.contrib.layers.xavier_initializer(),
         activation_fn=None,
         scope='value_fc1',

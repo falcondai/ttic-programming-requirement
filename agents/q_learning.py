@@ -187,7 +187,7 @@ class AsyncQLearningTrainer(Trainer):
             with tf.variable_scope('global'):
                 build_agent(env.spec)
                 global_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
-                self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer)
+                self.global_tick = tf.get_variable('global_tick', [], 'int32', trainable=False, initializer=tf.zeros_initializer())
                 # shared the optimizer
                 if args.shared:
                     optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)

@@ -13,7 +13,7 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_layers=1, n_fc_di
         net = tf.contrib.layers.fully_connected(
             inputs=net,
             num_outputs=n_fc_dim,
-            biases_initializer=tf.zeros_initializer,
+            biases_initializer=tf.zeros_initializer(),
             weights_initializer=tf.contrib.layers.xavier_initializer(),
             activation_fn=tf.nn.elu,
             scope='fc%i' % (i + 1),
@@ -23,7 +23,7 @@ def build_model(observation_shape, n_actions, batch=None, n_fc_layers=1, n_fc_di
     action_values = tf.contrib.layers.fully_connected(
         inputs=net,
         num_outputs=n_actions,
-        biases_initializer=tf.zeros_initializer,
+        biases_initializer=tf.zeros_initializer(),
         weights_initializer=tf.contrib.layers.xavier_initializer(),
         activation_fn=None,
         scope='q_fc1',

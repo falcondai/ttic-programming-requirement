@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:0.12.0-rc1-gpu
+FROM tensorflow/tensorflow:1.0.1-gpu
 
 MAINTAINER Falcon Dai <me@falcondai.com>
 
@@ -15,7 +15,8 @@ RUN pip install gym[atari]
 WORKDIR /root
 
 # convenient aliases
-RUN echo 'alias tk="tmux kill-session"' >> ~/.bashrc
 RUN echo 'alias tl="tmux list-session"' >> ~/.bashrc
+RUN echo 'alias ta="tmux attach-session"' >> ~/.bashrc
+RUN echo 'alias tk="tmux kill-session"' >> ~/.bashrc
 
 RUN ["/bin/bash"]

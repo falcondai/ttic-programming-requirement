@@ -15,7 +15,7 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
             kernel_size=(3, 3),
             stride=(2, 2),
             activation_fn=tf.nn.relu,
-            biases_initializer=tf.zeros_initializer,
+            biases_initializer=tf.zeros_initializer(),
             weights_initializer=tf.contrib.layers.xavier_initializer_conv2d(),
             scope='conv%i' % (i+1),
         )
@@ -41,7 +41,7 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
     action_logits = tf.contrib.layers.fully_connected(
         inputs=rnn_outputs,
         num_outputs=n_actions,
-        biases_initializer=tf.zeros_initializer,
+        biases_initializer=tf.zeros_initializer(),
         weights_initializer=tf.contrib.layers.xavier_initializer(),
         activation_fn=None,
         scope='action_fc1',
@@ -51,7 +51,7 @@ def build_model(observation_shape, n_actions, batch=None, n_cnn_layers=4, n_rnn_
     state_values = tf.contrib.layers.fully_connected(
         inputs=rnn_outputs,
         num_outputs=1,
-        biases_initializer=tf.zeros_initializer,
+        biases_initializer=tf.zeros_initializer(),
         weights_initializer=tf.contrib.layers.xavier_initializer(),
         activation_fn=None,
         scope='value_fc1',
