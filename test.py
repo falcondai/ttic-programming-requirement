@@ -50,7 +50,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--checkpoint-dir')
     parser.add_argument('--checkpoint-path')
-    parser.add_argument('--n-episodes', type=int, default=0)
+    parser.add_argument('-n', '--n-episodes', type=int, default=0)
     parser.add_argument('--render-fps', type=float, default=60.)
     parser.add_argument('--no-render', action='store_true')
     parser.add_argument('-e', '--env-id', default='atari.skip.quarter.Pong')

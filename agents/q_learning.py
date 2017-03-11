@@ -10,9 +10,11 @@ from gym import spaces
 
 class Q(object):
     def max_action_value(self, ob):
+        ''' this function takes observation ob and returns max_a action-value. This can serve as a state-value estimate '''
         raise NotImplementedError
 
     def pi_q(self, ob):
+        ''' this function takes observation ob and returns action and action-value '''
         raise NotImplementedError
 
 class StatefulQAgent(Q, StatefulAgent):

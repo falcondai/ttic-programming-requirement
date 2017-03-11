@@ -16,9 +16,11 @@ def lambda_advantage(rewards, values, gamma, td_lambda, bootstrap_value):
 
 class ActorCritic(object):
     def pi_v(self, ob):
+        ''' this function takes observation ob and returns action and state value '''
         raise NotImplementedError
 
     def state_value(self, ob):
+        ''' this function takes observation ob and returns state value '''
         raise NotImplementedError
 
 class StatefulActorCriticAgent(ActorCritic, StatefulAgent):
@@ -337,7 +339,7 @@ class A3CTrainer(Trainer):
             step_dt = 1.
         self.step_start_at = time.time()
 
-        # synchronize with parameter server
+        # copy parameters from the parameter server
         sess.run(self.sync_op)
 
         # sample a partial rollout

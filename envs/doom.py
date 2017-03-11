@@ -9,7 +9,7 @@ import vizdoom
 from vizdoom import *
 
 class DoomEnv(Env):
-    def __init__(self, config_path, package_dir_as_root=True, repeat_action=4, screen_shape=(240, 320), use_grayscale=True, draw_hud=False, draw_weapon=False, use_depth=False, use_labels=False, use_automap=False, render_fps=60.):
+    def __init__(self, config_path, package_dir_as_root=True, repeat_action=4, screen_shape=(240, 320), use_grayscale=True, draw_hud=False, draw_weapon=True, use_depth=False, use_labels=False, use_automap=False, render_fps=60.):
         self.game = DoomGame()
         if package_dir_as_root:
             dirname = os.path.dirname(vizdoom.__file__)
